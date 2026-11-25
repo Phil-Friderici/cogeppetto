@@ -49,7 +49,7 @@ AWS host (Ubuntu, nested virtualization available)
     ├── agent CLIs (Copilot required, others optional)
     ├── pm (uniform module commands)
     ├── /var/run/docker.sock        for Litmus test containers
-    └── network_mode: host          so Litmus SSH can reach test containers
+    └── --network host              so Litmus SSH can reach test containers
 ```
 
 - The container runs with the user's UID/GID and is in the group matching the Docker socket's GID.
@@ -79,7 +79,7 @@ AWS host (Ubuntu, nested virtualization available)
 ## 6. Agents
 
 - **Copilot CLI is required.** Claude Code, Codex and others can be selected via build argument (`AGENTS=copilot,claude`).
-- **`AGENTS.md`** is the shared instruction file for all agents. Claude Code gets a symlink `CLAUDE.md → AGENTS.md`. Contents:
+- **`AGENTS.md`** is the shared instruction file for all agents. Contents:
   - Always work on a branch `agent/<topic>`, never on the default branch.
   - `pm validate` and `pm unit` must pass before pushing.
   - How to run acceptance tests (`pm acceptance`).
@@ -153,7 +153,7 @@ One per-user **Forge API key** (`PUPPET_FORGE_TOKEN`) covers all three Puppet Co
 - Without the key, the module `Gemfile` falls back to the public gems on rubygems.org. Tests then run against an older public Puppet version, so results can differ from CI. `pm` should report which source is active.
 - The key lives in `~/geppetto/.env` (mode 0600), per user, alongside `GH_TOKEN`, and is passed to the container as an environment variable.
 - The key is passed to Litmus test targets as a task parameter. Those targets are disposable, which is acceptable.
-- Mitigations: `AGENTS.md` forbids printing or committing secrets; `pm push` can run a quick secret scan before pushing; the key is per user and can be revoked and regenerated on the Forge.
+- Mitigations: `AGENTS.md` forbids printing or committing secrets; `pm push` refuses to push commits that contain the token values; the key is per user and can be revoked and regenerated on the Forge.
 - Optional later: pass the key only to `pm` commands that need it instead of the whole container environment.
 
 ## 10. Acceptance tests
@@ -201,7 +201,7 @@ docs/concept.md             this document
 - **`pdk-version: 3.5.1`** in `metadata.json` → tests automatic PDK selection with an *older* PDK (image `geppetto:pdk-3.5.1`).
 - **Upgrading it to PDK 4.0.1** is a natural test case for `pm pdk-update`.
 - **The `Gemfile` switches `puppet`, `facter` and `bolt` to puppetcore** when `PUPPET_FORGE_TOKEN` is set → tests the credential handling from section 9.
-- **`provision.yaml` uses the classic `docker` provisioner** (SSH to `litmusimage/*` containers). This confirms that `network_mode: host` is needed.
+- **`provision.yaml` uses the classic `docker` provisioner** (SSH to `litmusimage/*` containers). This confirms that host networking is needed.
 - **Many listed images are outdated** (CentOS 7/8, Debian 8–10, Ubuntu 14.04–20.04); the default set is `litmusimage/centos:7`. Whether these images still work, or which current images to use instead, has to be tested.
 - **Windows is in `metadata.json`**, and `provision.yaml` contains a `vagrant` set with `gusztavvargadr/windows-server`. That makes motd the natural first test for the later `vagrant` backend and Windows.
 - The `release_checks_*` sets use the `abs` provisioner (Puppet internal) and are not usable here.
