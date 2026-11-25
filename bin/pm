@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# pm – Puppet module commands inside a Pinocchio.
+#
+# One uniform interface for every agent: clear output, meaningful exit codes.
+# Run from anywhere inside a module checkout. `pm help` for usage.
+set -euo pipefail
+
+# --------------------------------------------------------------------------- helpers
+
+die()  { printf 'pm: error: %s\n' "$*" >&2; exit 1; }
+info() { printf '==> %s\n' "$*"; }
+warn() { printf 'pm: warning: %s\n' "$*" >&2; }
+
+usage() {
+    cat <<'EOF'
+Usage: pm <command> [options]
+
+  info                      Show module, PDK versions, gem source, branch and remotes
+  setup                     Check remotes, fetch upstream, install the bundle
+  branch TOPIC              Create branch agent/TOPIC from the upstream default branch
+  validate [PDK_ARGS...]    pdk validate
+  unit [PDK_ARGS...]        pdk test unit
+  acceptance [options]      Litmus acceptance tests
+      --set NAME            provision.yaml set to use (default: default)
+      --inventory FILE      Test existing machines from FILE instead of provisioning
+      --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
+                            puppetcore8 with PUPPET_FORGE_TOKEN, else puppet8)
+      --keep                Keep the test machines after the run (no tear down)
+  pdk-update [--noop]       Update the module to this container's PDK, then validate + unit
+  push                      Push the current agent/* branch to your fork
+
+Exit code 0 means success; anything else means the step failed.
+EOF
+}
+
+find_module_root() {
+    local dir
+    dir="$(pwd -P)"
+    while [[ "${dir}" != "/" ]]; do
+        if [[ -f "${dir}/metadata.json" ]]; then
+            MODULE_ROOT="${dir}"
+            return
+        fi
+        dir="$(dirname "${dir}")"
+    done
+    die "no metadata.json found here or in a parent directory; cd into a module checkout."
+}
+
+module_pdk_version() { jq -r '."pdk-version" // empty' "${MODULE_ROOT}/metadata.json"; }
+container_pdk_version() { pdk --version 2>/dev/null | tail -n 1; }
+
+gem_source() {
+    if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
+        echo "puppetcore (rubygems-puppetcore.puppet.com)"
+    else
+        echo "public rubygems.org (no PUPPET_FORGE_TOKEN; older public Puppet gems)"
+    fi
+}
+
+prepare_env() {
+    if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
+        export BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM="forge-key:${PUPPET_FORGE_TOKEN}"
+    fi
+}
+
+check_pdk_match() {
+    local mod cont
+    mod="$(module_pdk_version)"
+    cont="$(container_pdk_version)"
+    if [[ -n "${mod}" && "${mod}" != "${cont}" ]]; then
+        warn "module was generated with PDK ${mod}, this container runs PDK ${cont}."
+        warn "results may differ; use 'pm pdk-update' to move the module to PDK ${cont}."
+    fi
+}
+
+# Re-install the bundle when the PDK version changed or the Gemfile is newer.
+ensure_bundle() {
+    local force="${1:-}"
+    local marker="${MODULE_ROOT}/.bundle/geppetto-pdk-version"
+    local current
+    current="$(container_pdk_version)"
+    if [[ -n "${force}" || ! -f "${marker}" || "$(cat "${marker}")" != "${current}" \
+          || "${MODULE_ROOT}/Gemfile" -nt "${marker}" ]]; then
+        info "Installing bundle for PDK ${current} (gems: $(gem_source))"
+        (cd "${MODULE_ROOT}" && pdk bundle install)
+        mkdir -p "$(dirname "${marker}")"
+        echo "${current}" > "${marker}"
+    fi
+}
+
+git_m() { git -C "${MODULE_ROOT}" "$@"; }
+
+default_branch() {
+    local remote="$1" ref
+    ref="$(git_m symbolic-ref --quiet "refs/remotes/${remote}/HEAD" 2>/dev/null || true)"
+    if [[ -z "${ref}" ]]; then
+        git_m remote set-head "${remote}" --auto >/dev/null 2>&1 || true
+        ref="$(git_m symbolic-ref --quiet "refs/remotes/${remote}/HEAD" 2>/dev/null || true)"
+    fi
+    [[ -n "${ref}" ]] || die "cannot determine the default branch of '${remote}'."
+    printf '%s' "${ref#refs/remotes/${remote}/}"
+}
+
+run_rake() { (cd "${MODULE_ROOT}" && pdk bundle exec rake "$@"); }
+
+# --------------------------------------------------------------------------- commands
+
+cmd_info() {
+    local branch
+    branch="$(git_m rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    cat <<EOF
+Module:        $(jq -r '.name' "${MODULE_ROOT}/metadata.json") ($(jq -r '.version' "${MODULE_ROOT}/metadata.json"))
+Path:          ${MODULE_ROOT}
+PDK module:    $(module_pdk_version || true)
+PDK container: $(container_pdk_version)
+Gem source:    $(gem_source)
+Branch:        ${branch}
+Remotes:
+$(git_m remote -v | sed 's/^/  /')
+EOF
+    check_pdk_match
+}
+
+cmd_setup() {
+    git_m remote get-url origin >/dev/null 2>&1 || die "remote 'origin' (your fork) is missing."
+    if git_m remote get-url upstream >/dev/null 2>&1; then
+        git_m remote set-url --push upstream DISABLED
+        info "Fetching upstream"
+        git_m fetch --quiet upstream || warn "could not fetch upstream."
+    else
+        warn "remote 'upstream' is missing; add it with: git remote add upstream https://github.com/${GEPPETTO_UPSTREAM_OWNER:-puppetlabs}/<module>.git"
+    fi
+    git_m fetch --quiet origin || warn "could not fetch origin."
+    check_pdk_match
+    ensure_bundle force
+    info "Setup complete."
+}
+
+cmd_branch() {
+    local topic="${1:-}"
+    [[ -n "${topic}" ]] || die "branch: which topic? e.g. pm branch issue-123"
+    topic="${topic#agent/}"
+    [[ "${topic}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "invalid topic '${topic}'."
+    local base_remote=upstream
+    git_m remote get-url upstream >/dev/null 2>&1 || base_remote=origin
+    git_m fetch --quiet "${base_remote}"
+    local base
+    base="${base_remote}/$(default_branch "${base_remote}")"
+    git_m switch --no-track -c "agent/${topic}" "${base}"
+    info "Created agent/${topic} from ${base}."
+}
+
+cmd_validate() {
+    check_pdk_match
+    ensure_bundle
+    info "pdk validate $*"
+    (cd "${MODULE_ROOT}" && pdk validate "$@")
+    info "validate: OK"
+}
+
+cmd_unit() {
+    check_pdk_match
+    ensure_bundle
+    info "pdk test unit $*"
+    (cd "${MODULE_ROOT}" && pdk test unit "$@")
+    info "unit: OK"
+}
+
+acceptance_teardown() {
+    if ((ACC_PROVISIONED)) && ((ACC_KEEP == 0)); then
+        info "Tearing down test machines"
+        run_rake litmus:tear_down || warn "tear down failed; check 'docker ps' for leftovers."
+    elif ((ACC_PROVISIONED)); then
+        info "Keeping test machines (inventory: ${ACC_INVENTORY})."
+        info "Remove them later with: pdk bundle exec rake litmus:tear_down"
+    fi
+}
+
+cmd_acceptance() {
+    local set="default" inventory="" collection="${GEPPETTO_COLLECTION:-}" keep=0
+    while (($#)); do
+        case "$1" in
+            --set) set="${2:?--set needs a name}"; shift 2 ;;
+            --inventory) inventory="${2:?--inventory needs a file}"; shift 2 ;;
+            --collection) collection="${2:?--collection needs a name}"; shift 2 ;;
+            --keep) keep=1; shift ;;
+            *) die "acceptance: unknown option '$1'." ;;
+        esac
+    done
+    if [[ -z "${collection}" ]]; then
+        if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then collection=puppetcore8; else collection=puppet8; fi
+    fi
+    if [[ "${collection}" == puppetcore* && -z "${PUPPET_FORGE_TOKEN:-}" ]]; then
+        die "collection ${collection} needs PUPPET_FORGE_TOKEN."
+    fi
+    [[ -d "${MODULE_ROOT}/spec/acceptance" ]] || die "module has no spec/acceptance directory."
+
+    check_pdk_match
+    ensure_bundle
+
+    # Globals: the EXIT trap runs after this function's locals are gone.
+    ACC_INVENTORY="${MODULE_ROOT}/spec/fixtures/litmus_inventory.yaml"
+    ACC_PROVISIONED=0
+    ACC_KEEP="${keep}"
+    trap acceptance_teardown EXIT
+
+    if [[ -n "${inventory}" ]]; then
+        [[ -f "${inventory}" ]] || die "inventory file ${inventory} not found."
+        mkdir -p "$(dirname "${ACC_INVENTORY}")"
+        cp "${inventory}" "${ACC_INVENTORY}"
+        info "Using existing machines from ${inventory} (no provisioning, no tear down)"
+    else
+        grep -qE "^${set}:" "${MODULE_ROOT}/provision.yaml" 2>/dev/null \
+            || die "set '${set}' not found in provision.yaml."
+        info "Provisioning set '${set}'"
+        ACC_PROVISIONED=1
+        run_rake "litmus:provision_list[${set}]"
+    fi
+
+    info "Installing agent (collection ${collection})"
+    run_rake "litmus:install_agent[${collection}]"
+    info "Installing module"
+    run_rake litmus:install_module
+    info "Running acceptance tests"
+    run_rake litmus:acceptance:parallel
+    info "acceptance: OK"
+}
+
+cmd_pdk_update() {
+    local noop=0
+    [[ "${1:-}" == "--noop" ]] && noop=1
+    local target
+    target="$(container_pdk_version)"
+    info "Changes needed to move the module from PDK $(module_pdk_version) to ${target}:"
+    (cd "${MODULE_ROOT}" && pdk update --noop) || true
+    ((noop)) && return 0
+    info "pdk update"
+    (cd "${MODULE_ROOT}" && pdk update --force)
+    ensure_bundle force
+    cmd_validate
+    cmd_unit
+    info "pdk-update: module is now on PDK ${target}. Review 'git diff' and commit."
+}
+
+cmd_push() {
+    local branch
+    branch="$(git_m symbolic-ref --quiet --short HEAD)" || die "not on a branch."
+    [[ "${branch}" == agent/* ]] \
+        || die "only agent/* branches are pushed (current: ${branch}). Use 'pm branch TOPIC'."
+    local origin_default
+    origin_default="$(default_branch origin)"
+    [[ "${branch}" != "${origin_default}" ]] || die "refusing to push the default branch."
+
+    if [[ -n "$(git_m status --porcelain)" ]]; then
+        warn "uncommitted changes are not pushed:"
+        git_m status --short >&2
+    fi
+
+    # Never push secrets: scan the commits that would be published.
+    local base_ref=origin
+    git_m remote get-url upstream >/dev/null 2>&1 && base_ref=upstream
+    local base
+    base="$(git_m merge-base HEAD "${base_ref}/$(default_branch "${base_ref}")" 2>/dev/null || true)"
+    local range="${base:+${base}..}HEAD" var
+    for var in GH_TOKEN PUPPET_FORGE_TOKEN; do
+        # Process substitution: with pipefail, `git log | grep -q` would report SIGPIPE.
+        if [[ -n "${!var:-}" ]] && grep -qF -- "${!var}" <(git_m log -p "${range}"); then
+            die "the commits contain the value of ${var}. Remove it from the history before pushing."
+        fi
+    done
+
+    info "Pushing ${branch} to origin"
+    git_m push --set-upstream origin "HEAD:refs/heads/${branch}"
+
+    local owner module upstream_owner
+    owner="${GEPPETTO_GITHUB_OWNER:-}"
+    module="$(basename "$(git_m remote get-url origin)" .git)"
+    upstream_owner="${GEPPETTO_UPSTREAM_OWNER:-puppetlabs}"
+    if [[ -n "${owner}" && "${base_ref}" == upstream ]]; then
+        info "Ready for review. Compare against upstream:"
+        echo "    https://github.com/${upstream_owner}/${module}/compare/$(default_branch upstream)...${owner}:${module}:${branch}"
+    fi
+}
+
+# --------------------------------------------------------------------------- main
+
+main() {
+    local cmd="${1:-help}"
+    (($#)) && shift
+    case "${cmd}" in
+        help|-h|--help) usage; return ;;
+    esac
+    find_module_root
+    prepare_env
+    case "${cmd}" in
+        info)       cmd_info ;;
+        setup)      cmd_setup ;;
+        branch)     cmd_branch "$@" ;;
+        validate)   cmd_validate "$@" ;;
+        unit)       cmd_unit "$@" ;;
+        acceptance) cmd_acceptance "$@" ;;
+        pdk-update) cmd_pdk_update "$@" ;;
+        push)       cmd_push ;;
+        *) usage >&2; exit 1 ;;
+    esac
+}
+
+main "$@"

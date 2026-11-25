@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+# geppetto – host command for the Geppetto workshop.
+#
+# Builds the workshop images and starts Pinocchios (agent containers) that work
+# on Puppet modules in your own GitHub forks. Run `geppetto help` for usage.
+set -euo pipefail
+
+GEPPETTO_SRC="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+GEPPETTO_HOME="${GEPPETTO_HOME:-${HOME}/geppetto}"
+ENV_FILE="${GEPPETTO_HOME}/.env"
+WORKSPACE="${GEPPETTO_HOME}/workspace"
+AGENT_HOME="${GEPPETTO_HOME}/home"
+DOCKER_SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
+IMAGE_REPO="geppetto"
+
+# Variables passed from .env into every Pinocchio (by name, never on the command line).
+PASSTHROUGH_VARS=(
+    GH_TOKEN PUPPET_FORGE_TOKEN
+    GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+    GEPPETTO_GITHUB_OWNER GEPPETTO_UPSTREAM_OWNER GEPPETTO_COLLECTION
+    BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM
+)
+
+# --------------------------------------------------------------------------- helpers
+
+die()  { printf 'geppetto: %s\n' "$*" >&2; exit 1; }
+info() { printf '==> %s\n' "$*"; }
+warn() { printf 'geppetto: warning: %s\n' "$*" >&2; }
+
+usage() {
+    cat <<'EOF'
+Usage: geppetto <command> [options]
+
+Setup
+  init                         Create ~/geppetto (workspace, home, .env)
+  build [--pdk VERSION]        Build the image geppetto:pdk-VERSION
+        [--pull] [--no-cache]
+  update                       Rebuild all existing images with the latest base and agents
+  images                       List built images
+  protect REPO...              Add a ruleset protecting the default branch of your fork(s)
+                               (uses your own `gh` login, not the agent token)
+
+Pinocchios
+  start MODULE [options]       Clone your fork of MODULE (if needed), start a Pinocchio
+                               and attach the agent
+        --name TASK            Task name (default: MODULE); container pinocchio-TASK
+        --pdk VERSION          Override the PDK version from metadata.json
+        --agent AGENT          copilot | claude | codex | shell (default: GEPPETTO_AGENT)
+        --upstream OWNER       Upstream owner (default: GEPPETTO_UPSTREAM_OWNER)
+        --detach               Start the container without attaching
+  attach TASK [--agent AGENT]  Attach an agent to a running Pinocchio
+  shell TASK                   Open a shell in a running Pinocchio
+  list                         List your Pinocchios
+  stop TASK                    Stop and remove a Pinocchio (the workspace stays)
+
+Configuration lives in ~/geppetto/.env (override with GEPPETTO_HOME).
+EOF
+}
+
+load_env() {
+    [[ -f "${ENV_FILE}" ]] || die "${ENV_FILE} not found; run 'geppetto init' first."
+    local mode
+    mode="$(stat -c '%a' "${ENV_FILE}")"
+    [[ "${mode}" == "600" ]] || warn "${ENV_FILE} has mode ${mode}; it contains secrets, use 'chmod 600'."
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_FILE}"
+    set +a
+
+    GEPPETTO_DEFAULT_PDK="${GEPPETTO_DEFAULT_PDK:-4.0.1}"
+    GEPPETTO_AGENTS="${GEPPETTO_AGENTS:-copilot}"
+    GEPPETTO_AGENT="${GEPPETTO_AGENT:-copilot}"
+    GEPPETTO_UPSTREAM_OWNER="${GEPPETTO_UPSTREAM_OWNER:-puppetlabs}"
+    GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-${GIT_AUTHOR_NAME:-}}"
+    GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL:-}}"
+    if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
+        BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM="forge-key:${PUPPET_FORGE_TOKEN}"
+    fi
+    export GEPPETTO_UPSTREAM_OWNER GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL \
+        BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM
+}
+
+require_docker() {
+    command -v docker >/dev/null || die "docker is not installed."
+    docker info >/dev/null 2>&1 \
+        || die "cannot talk to Docker. Is the daemon running and are you in the 'docker' group?"
+}
+
+image_tag()     { printf '%s:pdk-%s' "${IMAGE_REPO}" "$1"; }
+container_for() { printf 'pinocchio-%s' "$1"; }
+
+valid_name() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid name '$1' (use letters, digits, . _ -)."
+}
+
+container_state() {
+    docker inspect --format '{{.State.Status}}' "$1" 2>/dev/null || true
+}
+
+# git with GH_TOKEN as credential, without storing it anywhere.
+git_with_token() {
+    if [[ -n "${GH_TOKEN:-}" ]]; then
+        git -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f' \
+            "$@"
+    else
+        git "$@"
+    fi
+}
+
+agent_command() {
+    case "$1" in
+        copilot) echo copilot ;;
+        claude)  echo claude ;;
+        codex)   echo codex ;;
+        shell)   echo "bash -l" ;;
+        *) die "unknown agent '$1' (copilot, claude, codex, shell)." ;;
+    esac
+}
+
+# --------------------------------------------------------------------------- commands
+
+cmd_init() {
+    mkdir -p "${WORKSPACE}" "${AGENT_HOME}"
+    if [[ -f "${ENV_FILE}" ]]; then
+        info "${ENV_FILE} already exists; leaving it unchanged."
+    else
+        install -m 0600 "${GEPPETTO_SRC}/.env.example" "${ENV_FILE}"
+        info "Created ${ENV_FILE} (mode 600)."
+    fi
+    cat <<EOF
+
+Next steps:
+  1. Edit ${ENV_FILE}: GH_TOKEN, PUPPET_FORGE_TOKEN, GEPPETTO_GITHUB_OWNER, git identity.
+  2. geppetto build                      # image for the default PDK version
+  3. geppetto protect puppetlabs-motd    # once per fork
+  4. geppetto start puppetlabs-motd
+EOF
+}
+
+cmd_build() {
+    local pdk="" extra=()
+    while (($#)); do
+        case "$1" in
+            --pdk) pdk="${2:?--pdk needs a version}"; shift 2 ;;
+            --pull) extra+=(--pull); shift ;;
+            --no-cache) extra+=(--no-cache); shift ;;
+            *) die "build: unknown option '$1'." ;;
+        esac
+    done
+    load_env
+    require_docker
+    pdk="${pdk:-${GEPPETTO_DEFAULT_PDK}}"
+    [[ -n "${PUPPET_FORGE_TOKEN:-}" ]] \
+        || die "PUPPET_FORGE_TOKEN is not set in ${ENV_FILE}; it is needed to download PDK."
+
+    # APT credentials for the BuildKit secret; removed again on any exit.
+    GEPPETTO_AUTH_FILE="$(mktemp)"
+    trap 'rm -f "${GEPPETTO_AUTH_FILE:-}"' EXIT
+    chmod 600 "${GEPPETTO_AUTH_FILE}"
+    printf 'machine apt-puppetcore.puppet.com\nlogin forge-key\npassword %s\n' \
+        "${PUPPET_FORGE_TOKEN}" > "${GEPPETTO_AUTH_FILE}"
+
+    info "Building $(image_tag "${pdk}") (agents: ${GEPPETTO_AGENTS})"
+    DOCKER_BUILDKIT=1 docker build "${extra[@]}" \
+        --secret "id=puppetcore_apt_auth,src=${GEPPETTO_AUTH_FILE}" \
+        --build-arg "PDK_VERSION=${pdk}" \
+        --build-arg "AGENTS=${GEPPETTO_AGENTS}" \
+        --tag "$(image_tag "${pdk}")" \
+        "${GEPPETTO_SRC}"
+    rm -f "${GEPPETTO_AUTH_FILE}"
+}
+
+cmd_images() {
+    require_docker
+    docker images "${IMAGE_REPO}" --format 'table {{.Repository}}:{{.Tag}}\t{{.CreatedSince}}\t{{.Size}}'
+}
+
+cmd_update() {
+    require_docker
+    local versions
+    versions="$(docker images "${IMAGE_REPO}" --format '{{.Tag}}' | sed -n 's/^pdk-//p' | sort -u)"
+    if [[ -z "${versions}" ]]; then
+        info "No images yet; building the default one."
+        cmd_build --pull
+        return
+    fi
+    local v
+    for v in ${versions}; do
+        cmd_build --pdk "${v}" --pull --no-cache
+    done
+    info "Running Pinocchios keep their old image until restarted (geppetto stop / start)."
+}
+
+detect_pdk_version() {
+    local metadata="$1/metadata.json" version=""
+    if [[ -f "${metadata}" ]]; then
+        version="$(jq -r '."pdk-version" // empty' "${metadata}")"
+    fi
+    if [[ -z "${version}" ]]; then
+        warn "no pdk-version in metadata.json; using default PDK ${GEPPETTO_DEFAULT_PDK}."
+        version="${GEPPETTO_DEFAULT_PDK}"
+    fi
+    printf '%s' "${version}"
+}
+
+prepare_checkout() {
+    local module="$1" dir="$2" upstream_owner="$3"
+    [[ -n "${GEPPETTO_GITHUB_OWNER:-}" ]] || die "GEPPETTO_GITHUB_OWNER is not set in ${ENV_FILE}."
+
+    if [[ -d "${dir}/.git" ]]; then
+        info "Using existing checkout ${dir}"
+        return
+    fi
+    [[ ! -e "${dir}" ]] || die "${dir} exists but is not a git checkout."
+
+    info "Cloning ${GEPPETTO_GITHUB_OWNER}/${module} into ${dir}"
+    git_with_token clone "https://github.com/${GEPPETTO_GITHUB_OWNER}/${module}.git" "${dir}" \
+        || die "clone failed. Does the fork ${GEPPETTO_GITHUB_OWNER}/${module} exist and is it in your token?"
+    git -C "${dir}" remote add upstream "https://github.com/${upstream_owner}/${module}.git"
+    git -C "${dir}" remote set-url --push upstream DISABLED
+    git_with_token -C "${dir}" fetch --quiet upstream \
+        || warn "could not fetch upstream ${upstream_owner}/${module}."
+}
+
+cmd_start() {
+    local module="" task="" pdk="" agent="" upstream="" detach=0
+    while (($#)); do
+        case "$1" in
+            --name) task="${2:?--name needs a value}"; shift 2 ;;
+            --pdk) pdk="${2:?--pdk needs a version}"; shift 2 ;;
+            --agent) agent="${2:?--agent needs a value}"; shift 2 ;;
+            --upstream) upstream="${2:?--upstream needs an owner}"; shift 2 ;;
+            --detach) detach=1; shift ;;
+            -*) die "start: unknown option '$1'." ;;
+            *) [[ -z "${module}" ]] || die "start: only one module allowed."; module="$1"; shift ;;
+        esac
+    done
+    [[ -n "${module}" ]] || die "start: which module? e.g. geppetto start puppetlabs-motd"
+    load_env
+    require_docker
+    task="${task:-${module}}"
+    agent="${agent:-${GEPPETTO_AGENT}}"
+    upstream="${upstream:-${GEPPETTO_UPSTREAM_OWNER}}"
+    valid_name "${module}"
+    valid_name "${task}"
+    agent_command "${agent}" >/dev/null
+
+    local name state
+    name="$(container_for "${task}")"
+    state="$(container_state "${name}")"
+    if [[ "${state}" == "running" ]]; then
+        die "${name} is already running. Use 'geppetto attach ${task}' or 'geppetto stop ${task}'."
+    elif [[ -n "${state}" ]]; then
+        docker rm "${name}" >/dev/null
+    fi
+
+    mkdir -p "${WORKSPACE}" "${AGENT_HOME}"
+    local dir="${WORKSPACE}/${task}"
+    prepare_checkout "${module}" "${dir}" "${upstream}"
+
+    if [[ -z "${pdk}" ]]; then
+        pdk="$(detect_pdk_version "${dir}")"
+        info "Module uses PDK ${pdk}"
+    fi
+    local image
+    image="$(image_tag "${pdk}")"
+    if ! docker image inspect "${image}" >/dev/null 2>&1; then
+        info "Image ${image} does not exist yet; building it."
+        cmd_build --pdk "${pdk}"
+    fi
+
+    [[ -S "${DOCKER_SOCKET}" ]] || die "Docker socket ${DOCKER_SOCKET} not found."
+    local env_args=() var
+    for var in "${PASSTHROUGH_VARS[@]}"; do
+        [[ -n "${!var:-}" ]] && env_args+=(--env "${var}")
+    done
+
+    info "Starting ${name} (${image})"
+    docker run --detach \
+        --name "${name}" \
+        --hostname "${name}" \
+        --label "geppetto.user=${USER}" \
+        --label "geppetto.task=${task}" \
+        --label "geppetto.module=${module}" \
+        --user "$(id -u):$(id -g)" \
+        --group-add "$(stat -c '%g' "${DOCKER_SOCKET}")" \
+        --network host \
+        "${env_args[@]}" \
+        --env "GEPPETTO_TASK=${task}" \
+        --env "GEPPETTO_MODULE=${module}" \
+        --volume "${dir}:/workspace/${task}" \
+        --volume "${AGENT_HOME}:/home/pinocchio" \
+        --volume "${DOCKER_SOCKET}:/var/run/docker.sock" \
+        --workdir "/workspace/${task}" \
+        "${image}" sleep infinity >/dev/null
+
+    if ((detach)); then
+        info "Started. Attach with: geppetto attach ${task}"
+    else
+        cmd_attach "${task}" --agent "${agent}"
+    fi
+}
+
+cmd_attach() {
+    local task="${1:-}" agent=""
+    [[ -n "${task}" ]] || die "attach: which task?"
+    shift
+    while (($#)); do
+        case "$1" in
+            --agent) agent="${2:?--agent needs a value}"; shift 2 ;;
+            *) die "attach: unknown option '$1'." ;;
+        esac
+    done
+    load_env
+    agent="${agent:-${GEPPETTO_AGENT}}"
+    local name cmd
+    name="$(container_for "${task}")"
+    [[ "$(container_state "${name}")" == "running" ]] \
+        || die "${name} is not running. Start it with 'geppetto start <module> --name ${task}'."
+    cmd="$(agent_command "${agent}")"
+    info "Attaching ${agent} to ${name} (leave with Ctrl-D / exit; the container keeps running)"
+    # shellcheck disable=SC2086
+    docker exec --interactive --tty "${name}" ${cmd}
+}
+
+cmd_shell() {
+    [[ -n "${1:-}" ]] || die "shell: which task?"
+    cmd_attach "$1" --agent shell
+}
+
+cmd_list() {
+    require_docker
+    docker ps --all \
+        --filter "label=geppetto.user=${USER}" \
+        --format 'table {{.Label "geppetto.task"}}\t{{.Label "geppetto.module"}}\t{{.Image}}\t{{.Status}}'
+}
+
+cmd_stop() {
+    local task="${1:-}"
+    [[ -n "${task}" ]] || die "stop: which task?"
+    require_docker
+    local name
+    name="$(container_for "${task}")"
+    [[ -n "$(container_state "${name}")" ]] || die "${name} does not exist."
+    docker rm --force "${name}" >/dev/null
+    info "Removed ${name}. Workspace ${WORKSPACE}/${task} is kept."
+}
+
+cmd_protect() {
+    (($#)) || die "protect: which repositories? e.g. geppetto protect puppetlabs-motd"
+    load_env
+    [[ -n "${GEPPETTO_GITHUB_OWNER:-}" ]] || die "GEPPETTO_GITHUB_OWNER is not set in ${ENV_FILE}."
+    command -v gh >/dev/null || die "the GitHub CLI 'gh' is needed on the host for 'protect'."
+    # Use the operator's own gh login: the agent token must not be able to manage rulesets.
+    local ghx=(env -u GH_TOKEN -u GITHUB_TOKEN gh)
+    "${ghx[@]}" auth status >/dev/null 2>&1 || die "log in on the host first: gh auth login"
+
+    local repo full
+    for repo in "$@"; do
+        full="${GEPPETTO_GITHUB_OWNER}/${repo}"
+        if "${ghx[@]}" api "repos/${full}/rulesets" --jq '.[].name' | grep -qx 'geppetto-protect-default'; then
+            info "${full}: ruleset already present."
+            continue
+        fi
+        "${ghx[@]}" api --method POST "repos/${full}/rulesets" --input - >/dev/null <<'JSON'
+{
+  "name": "geppetto-protect-default",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false
+      } }
+  ]
+}
+JSON
+        info "${full}: default branch protected (no direct push, no force push, no deletion)."
+    done
+}
+
+# --------------------------------------------------------------------------- main
+
+main() {
+    local cmd="${1:-help}"
+    (($#)) && shift
+    case "${cmd}" in
+        init)    cmd_init "$@" ;;
+        build)   cmd_build "$@" ;;
+        update)  cmd_update "$@" ;;
+        images)  cmd_images "$@" ;;
+        protect) cmd_protect "$@" ;;
+        start)   cmd_start "$@" ;;
+        attach)  cmd_attach "$@" ;;
+        shell)   cmd_shell "$@" ;;
+        list|ls) cmd_list "$@" ;;
+        stop|rm) cmd_stop "$@" ;;
+        help|-h|--help) usage ;;
+        *) usage >&2; exit 1 ;;
+    esac
+}
+
+main "$@"
