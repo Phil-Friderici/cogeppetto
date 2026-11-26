@@ -159,13 +159,13 @@ One per-user **Forge API key** (`PUPPET_FORGE_TOKEN`) covers all three Puppet Co
 | Use | When | How it is supplied |
 |---|---|---|
 | PDK package from `apt-puppetcore.puppet.com` | image build | APT auth file (`login forge-key`, `password <key>`) generated from the key, passed as BuildKit secret |
-| `puppet`, `facter`, `bolt` gems from `rubygems-puppetcore.puppet.com` | bundle install, unit and acceptance tests | module `Gemfile` switches to puppetcore when `PUPPET_FORGE_TOKEN` is set; the credentials (`forge-key:<key>`) go into Bundler's global config `~/.bundle/config`, written by the entrypoint and `pm`. Environment variables do not work: PDK runs Bundler in a clean environment that drops all `BUNDLE_*` variables |
+| `puppet`, `facter`, `bolt` gems from `rubygems-puppetcore.puppet.com` | bundle install, unit and acceptance tests | module `Gemfile` switches to puppetcore when `PUPPET_FORGE_TOKEN` is set. PDK runs Bundler without any `BUNDLE_*` variables and with `BUNDLE_IGNORE_CONFIG=1`, so neither `BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM` nor `~/.bundle/config` work. Instead `~/.gemfile` (evaluated by every PDK-templated Gemfile) sets `forge-key:<key>` in Bundler's in-memory settings from `PUPPET_FORGE_TOKEN`; the file contains no secret |
 | Puppet Core agent on test targets | `litmus:install_agent` | Litmus reads `PUPPET_FORGE_TOKEN` from the environment; `puppetcore*` collections fail without it |
 
 **Consequences and handling:**
 - The key is needed **at runtime** in the container, not only at build time.
 - Without the key, the module `Gemfile` falls back to the public gems on rubygems.org. Tests then run against an older public Puppet version, so results can differ from CI. `pm` should report which source is active.
-- The key lives in `~/geppetto/.env` (mode 0600), per user, alongside `GH_TOKEN`, and is passed to the container as an environment variable. For Bundler it is also written to `~/geppetto/home/.bundle/config` (mode 0600, kept in sync with `.env`).
+- The key lives in `~/geppetto/.env` (mode 0600), per user, alongside `GH_TOKEN`, and is passed to the container as an environment variable. It is not written to disk anywhere else.
 - The key is passed to Litmus test targets as a task parameter. Those targets are disposable, which is acceptable.
 - Mitigations: `AGENTS.md` forbids printing or committing secrets; `pm push` refuses to push commits that contain the token values; the key is per user and can be revoked and regenerated on the Forge.
 - Optional later: pass the key only to `pm` commands that need it instead of the whole container environment.

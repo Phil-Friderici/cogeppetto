@@ -59,32 +59,38 @@ gem_source() {
 
 # Puppet Core gem credentials for Bundler.
 #
-# PDK runs Bundler in a clean environment that drops every BUNDLE_* variable, so the
-# credentials must live in Bundler's global config (~/.bundle/config), as Puppet's
-# documentation describes. The file is kept in sync with PUPPET_FORGE_TOKEN: written
-# when the key is set, the entries removed when it is not. Other settings are kept.
+# PDK runs Bundler in a clean environment: it drops every BUNDLE_* variable and sets
+# BUNDLE_IGNORE_CONFIG=1, so neither BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM nor
+# ~/.bundle/config reach Bundler. What does reach it is PUPPET_FORGE_TOKEN and the
+# module Gemfile, which (like every PDK-templated Gemfile) evaluates ~/.gemfile.
+# ~/.gemfile therefore sets the credentials in Bundler's in-memory settings from
+# PUPPET_FORGE_TOKEN. The file itself contains no secret.
+GEMFILE_MARKER='# Managed by Geppetto (pm): Puppet Core credentials'
+
 sync_bundle_credentials() {
-    local config="${HOME}/.bundle/config" tmp
-    local keys=('BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM'
-                'BUNDLE_HTTPS://RUBYGEMS___PUPPETCORE__PUPPET__COM/')
-    mkdir -p "$(dirname "${config}")"
-    tmp="$(mktemp "${config}.XXXXXX")"
-    chmod 600 "${tmp}"
-    {
-        echo '---'
-        if [[ -f "${config}" ]]; then
-            grep -v -e '^---$' -e '^"\?BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM' \
-                -e '^"\?BUNDLE_HTTPS://RUBYGEMS___PUPPETCORE__PUPPET__COM/' "${config}" || true
-        fi
-        if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
-            local key
-            for key in "${keys[@]}"; do
-                # Unquoted key: Bundler's own config parser does not strip quotes from keys.
-                printf '%s: "forge-key:%s"\n' "${key}" "${PUPPET_FORGE_TOKEN}"
-            done
-        fi
-    } > "${tmp}"
-    mv "${tmp}" "${config}"
+    local gemfile="${HOME}/.gemfile"
+    if [[ -f "${gemfile}" ]] && ! grep -qF "${GEMFILE_MARKER}" "${gemfile}"; then
+        warn "${gemfile} exists and is not managed by Geppetto; Puppet Core credentials not configured."
+    else
+        cat > "${gemfile}" <<RUBY
+${GEMFILE_MARKER}
+# PDK runs Bundler with BUNDLE_IGNORE_CONFIG=1 and without BUNDLE_* variables, so the
+# credentials are set in memory here, when the module Gemfile evaluates ~/.gemfile.
+geppetto_forge_token = ENV['PUPPET_FORGE_TOKEN'].to_s
+if !geppetto_forge_token.empty? && defined?(Bundler) && Bundler.respond_to?(:settings)
+  Bundler.settings.temporary('rubygems-puppetcore.puppet.com' => "forge-key:#{geppetto_forge_token}")
+end
+RUBY
+    fi
+    # Remove credentials an earlier Geppetto version wrote to ~/.bundle/config.
+    local config="${HOME}/.bundle/config"
+    if [[ -f "${config}" ]] && grep -q 'PUPPETCORE__PUPPET__COM' "${config}"; then
+        local tmp
+        tmp="$(mktemp "${config}.XXXXXX")"
+        grep -v 'PUPPETCORE__PUPPET__COM' "${config}" > "${tmp}" || true
+        chmod 600 "${tmp}"
+        mv "${tmp}" "${config}"
+    fi
 }
 
 prepare_env() {
