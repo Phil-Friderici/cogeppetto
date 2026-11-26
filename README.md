@@ -28,7 +28,9 @@ See [docs/concept.md](docs/concept.md) for the design and its reasoning.
 - A **Forge API key** with Puppet Core access (`PUPPET_FORGE_TOKEN`).
 - A GitHub **fine-grained personal access token** (`GH_TOKEN`):
   resource owner = your account, repository access = only your module forks,
-  permission **Contents: Read and write**, nothing else.
+  permissions **Contents: Read and write** and **Workflows: Read and write**, nothing
+  else (Workflows is needed to push changes to `.github/workflows/`, e.g. after
+  `pm pdk-update`). Use a dedicated token for Geppetto.
 - An account for the agent you use (e.g. GitHub Copilot).
 
 > **Security note:** Pinocchios get the host's Docker socket so Litmus can start test

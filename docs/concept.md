@@ -124,7 +124,8 @@ pm push         push branch agent/<topic> to the fork (secret check, trailer war
 **Token (fine-grained PAT, per user):**
 - Resource owner: your own account.
 - Repository access: "Only select repositories", i.e. the forks.
-- Permission: **Contents: Read and write**, nothing else.
+- Permissions: **Contents: Read and write** and **Workflows: Read and write**, nothing else. Workflows is required by GitHub to push changes under `.github/workflows/`, which `pm pdk-update` produces when the PDK template updates the CI workflows.
+- A dedicated token for Geppetto, so it can be identified ("Last used") and revoked independently.
 - One token covers all forks of one owner. New forks are added to the token.
 - The token automatically has read access to all public repos. Agents can read code, issues and PRs from `puppetlabs`, with 5,000 instead of 60 API requests per hour.
 - Put the expiry date in your calendar.
