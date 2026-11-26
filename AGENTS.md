@@ -42,7 +42,10 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
    2. `pm unit`
    3. `pm apply` – check on a real machine that the change does what it should
       (see *Manual runs* below). Skip it only if the change has no effect on managed
-      systems (e.g. documentation), and say so.
+      systems (e.g. documentation), and say so. If `pm target up` fails with an
+      infrastructure error (no agent for the platform, provisioning failed), use
+      `pm target up --image <current platform>`, e.g. `litmusimage/ubuntu:22.04`.
+      Never skip `pm apply` without saying so in your report.
    4. `pm acceptance` – when the module has acceptance tests. It provisions Docker
       containers, installs Puppet, runs the tests and tears everything down.
       Run `pm target down` first if a test machine from step 3 is still running.
