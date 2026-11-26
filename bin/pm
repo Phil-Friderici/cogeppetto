@@ -297,6 +297,23 @@ check_collection() {
 }
 
 # Provision from either Docker images (array name in $1) or a provision.yaml set ($2).
+# Litmus' docker provisioner starts the container before it sets up SSH. If that setup
+# fails, the container is neither added to the inventory nor removed, so tear down does
+# not know it. Remove exactly the containers named in the error ("docker exec <id> ..."),
+# and only if they run the image that was being provisioned.
+remove_failed_provision_containers() {
+    local log="$1" image="$2" id actual
+    while read -r id; do
+        [[ -n "${id}" ]] || continue
+        actual="$(docker inspect --format '{{.Config.Image}}' "${id}" 2>/dev/null || true)"
+        if [[ "${actual}" == "${image}" ]]; then
+            docker rm --force "${id}" >/dev/null 2>&1 \
+                && info "Removed container ${id} left over by the failed provisioning of ${image}" \
+                || warn "could not remove container ${id}; remove it with: docker rm -f ${id}"
+        fi
+    done < <(grep -oE 'docker exec [0-9a-f]{12,64}' "${log}" | awk '{print $3}' | sort -u)
+}
+
 provision_machines() {
     local -n images_ref="$1"
     local set="$2" image
@@ -304,7 +321,14 @@ provision_machines() {
         for image in "${images_ref[@]}"; do
             [[ "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "invalid image name '${image}'."
             info "Provisioning ${image} (docker, not from provision.yaml)"
-            run_rake "litmus:provision[docker,${image}]" || return 1
+            local plog
+            plog="$(mktemp)"
+            if ! run_rake "litmus:provision[docker,${image}]" 2>&1 | tee "${plog}"; then
+                remove_failed_provision_containers "${plog}" "${image}"
+                rm -f "${plog}"
+                return 1
+            fi
+            rm -f "${plog}"
         done
     else
         grep -qE "^${set}:" "${MODULE_ROOT}/provision.yaml" 2>/dev/null \
@@ -457,6 +481,7 @@ acceptance_images() {
         if ! run_rake "litmus:provision[${prov},${image}]" 2>&1 | tee "${log}"; then
             acc_result "${label}" "${image}" "PROVISION FAILED" "$(error_hint "${log}")"
             warn "${image}: PROVISION FAILED"
+            remove_failed_provision_containers "${log}" "${image}"
             continue
         fi
         after="$(inventory_uris | sort)"

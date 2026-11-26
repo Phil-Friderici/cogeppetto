@@ -38,6 +38,8 @@ Setup
   images                       List built images
   protect REPO...              Add a ruleset protecting the default branch of your fork(s)
                                (uses your own `gh` login, not the agent token)
+  cleanup [--yes]              Remove leftover Litmus test containers (litmusimage/*);
+                               asks first unless --yes
 
 Pinocchios
   start MODULE [options]       Clone your fork of MODULE (if needed), start a Pinocchio
@@ -429,6 +431,30 @@ JSON
     done
 }
 
+cmd_cleanup() {
+    local yes=0
+    [[ "${1:-}" == "--yes" ]] && yes=1
+    require_docker
+    local lines
+    lines="$(docker ps --all --format '{{.ID}}\t{{.Image}}\t{{.RunningFor}}\t{{.Status}}' \
+        | awk -F '\t' '$2 ~ /^litmusimage\//')"
+    if [[ -z "${lines}" ]]; then
+        info "No Litmus test containers found."
+        return 0
+    fi
+    printf 'CONTAINER\tIMAGE\tCREATED\tSTATUS\n%s\n' "${lines}" \
+        | awk -F '\t' '{printf "%-14s %-32s %-18s %s\n", $1, $2, $3, $4}'
+    echo
+    warn "test runs in progress (yours or a colleague's on this host) lose these machines."
+    if ((yes == 0)); then
+        local answer
+        read -r -p "Remove these containers? [y/N] " answer
+        [[ "${answer}" =~ ^[yY]$ ]] || { info "Nothing removed."; return 0; }
+    fi
+    cut -f1 <<<"${lines}" | xargs docker rm --force >/dev/null
+    info "Removed $(wc -l <<<"${lines}") container(s)."
+}
+
 # --------------------------------------------------------------------------- main
 
 main() {
@@ -440,6 +466,7 @@ main() {
         update)  cmd_update "$@" ;;
         images)  cmd_images "$@" ;;
         protect) cmd_protect "$@" ;;
+        cleanup) cmd_cleanup "$@" ;;
         start)   cmd_start "$@" ;;
         attach)  cmd_attach "$@" ;;
         shell)   cmd_shell "$@" ;;

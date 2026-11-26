@@ -100,6 +100,7 @@ geppetto protect <repo>...
 geppetto start <module> [--name <task>] [--pdk <version>] [--agent copilot|claude|codex|shell]
                [--upstream <owner>[/<repo>]]
 geppetto attach <task> | shell <task> | list | stop <task>
+geppetto cleanup [--yes]
 ```
 
 **In the container (`pm`):**
@@ -202,6 +203,8 @@ Litmus is the successor to Beaker. It uses Bolt for connectivity (SSH or WinRM) 
 **Several operating systems:** `--image` can be given several times, `--set` runs one set, and `pm acceptance --all-sets` runs every docker set from `provision.yaml` one after another, each in its own subshell with its own tear down. The host's CPU and memory limit how many systemd containers run in parallel.
 
 **Results per image** (verified with deliberately failing runs on motd, 2026-11-26): Litmus provisions a set and installs the agent for all its machines at once, so one broken image (e.g. Debian 8 with removed package repositories, Ubuntu 16.04 without a working SSH restart, CentOS 8 with dead mirrors, CentOS 7 without a Puppet 9 agent) used to abort the whole set. `pm` therefore provisions each image with `litmus:provision[<provisioner>,<image>]` and installs the agent per machine with `litmus:install_agent[<collection>,<uri>]`; a failing image is recorded and removed, the others continue. Module installation and `litmus:acceptance:parallel` then run once for the remaining machines, and the result per machine is taken from Litmus' `Successful on … nodes` / `Failed on … nodes` lines plus each machine's `N examples, M failures` line. Statuses: `OK` and `TEST FAILED` concern the module; `PROVISION FAILED`, `AGENT FAILED` and `MISSING` are infrastructure and are reported with the most telling error line, not worked around. Exit codes: 0 all tested images OK, 1 at least one test failure, 3 infrastructure problems only (or nothing testable). Sets with settings besides `provisioner` and `images` (e.g. `vars`) keep the previous behaviour: provisioned as a whole with one result for the set.
+
+**Leftover containers:** Litmus' docker provisioner starts the container before it sets up SSH; when that setup fails (`PROVISION FAILED`), the container is neither added to the inventory nor removed, so `litmus:tear_down` does not know it. `pm` removes exactly the containers named in the error message (`docker exec <id> …`), and only if they run the image being provisioned, so parallel Pinocchios are not affected. `geppetto cleanup` on the host lists and removes any remaining `litmusimage/*` containers after asking.
 
 **Which images are usable:** `pm sets` checks each image of `provision.yaml` live. Docker images come from the public `litmusimage/*` repositories on Docker Hub (debian, ubuntu, centos, oraclelinux, rockylinux, almalinux, amazonlinux, redhat, fedora, sles, scientificlinux as of 2026-11-26); `pm sets` checks with `docker manifest inspect`, without downloading. `abs` and `provision_service` are Puppet-internal services and not usable; `vagrant` boxes are public but need the `vagrant` backend. An existing image does not guarantee that the chosen agent collection supports the platform; that shows only during `litmus:install_agent`.
 

@@ -77,6 +77,7 @@ geppetto attach issue-42                       # reattach the agent
 geppetto shell issue-42
 geppetto stop issue-42                         # container goes, workspace stays
 geppetto update                                # rebuild images: latest base and agents
+geppetto cleanup                               # remove leftover Litmus test containers
 ```
 
 Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings you back.
@@ -166,6 +167,7 @@ On first start, log in to the agent (Copilot: `/login`); the login persists in
 | `pm push` rejected: `refusing to allow a Personal Access Token to create or update workflow` | The token needs *Workflows: Read and write*. |
 | `git push origin HEAD:main`: `GH013: Repository rule violations` | Expected: `geppetto protect` blocks direct pushes to the default branch. |
 | `Authentication is required for rubygems-puppetcore.puppet.com` | `PUPPET_FORGE_TOKEN` missing or `~/.gemfile` not managed by Geppetto (`pm info` warns). |
+| `docker ps` shows `litmusimage/*` containers after a run | Litmus leaves a container behind when provisioning fails after the container started (e.g. SSH setup). `pm` removes these itself since 2026-11-26; for older leftovers run `geppetto cleanup`. |
 | `Could not find compatible versions … bolt … puppet >= 8.11` | Puppet Core gems with PDK 3.x; leave `GEPPETTO_GEM_SOURCE` on `auto` (public gems for PDK 3.x). |
 
 Changes to `.env` take effect after `geppetto stop <task>` and `geppetto start …`; changes to
