@@ -24,7 +24,7 @@ See [docs/concept.md](docs/concept.md) for the design and its reasoning.
 
 - A dedicated Linux host (e.g. Ubuntu on AWS) with Docker Engine and BuildKit.
   Your user must be in the `docker` group.
-- `git`, `jq` and, for `geppetto protect`, the GitHub CLI `gh` on the host.
+- `git`, `curl`, `jq` and, for `geppetto protect`, the GitHub CLI `gh` on the host.
 - A **Forge API key** with Puppet Core access (`PUPPET_FORGE_TOKEN`).
 - A GitHub **fine-grained personal access token** (`GH_TOKEN`):
   resource owner = your account, repository access = only your module forks,
@@ -43,12 +43,14 @@ git clone https://github.com/Phil-Friderici/geppetto.git ~/geppetto-src
 ln -s ~/geppetto-src/bin/geppetto ~/.local/bin/geppetto   # or add bin/ to PATH
 
 geppetto init            # creates ~/geppetto/{workspace,home,.env}
-$EDITOR ~/geppetto/.env  # tokens, GitHub owner, git identity
+$EDITOR ~/geppetto/.env  # tokens, your GitHub account, git identity
 geppetto build           # image for the default PDK (GEPPETTO_DEFAULT_PDK)
 ```
 
 For each module: fork it on GitHub into your account, add the fork to the token's
-repository list, then protect its default branch:
+repository list, then protect its default branch. The upstream repository does not need
+to be configured: `geppetto start` reads it from the fork's parent on GitHub, so forks of
+`puppetlabs`, `voxpupuli` or anyone else work the same way.
 
 ```bash
 gh auth login                       # once, with your own account
@@ -67,6 +69,7 @@ geppetto start puppetlabs-motd                 # task name = module name
 geppetto start puppetlabs-motd --name issue-42 # second, independent checkout
 geppetto start puppetlabs-motd --pdk 4.0.1     # override the PDK version
 geppetto start puppetlabs-motd --agent shell   # just a shell
+geppetto start my-module --upstream someone    # repo is a copy, not a GitHub fork
 geppetto list
 geppetto attach issue-42                       # reattach the agent
 geppetto shell issue-42
@@ -102,6 +105,15 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 | `~/geppetto/.env` | environment | Tokens and settings |
 
 Images contain only programs. Rebuilding or removing containers never touches your work.
+
+## Commits and attribution
+
+Agents commit with **your** git identity (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` in
+`.env`), because you review the work and open the pull request; GitHub, CLA and DCO
+checks then attribute the commits to you. Every agent commit ends with a trailer such as
+`Assisted-by: GitHub Copilot CLI (Geppetto)`, so reviewers can see that an agent was
+involved. If your GitHub settings block pushes that expose your email address, use your
+`users.noreply.github.com` address instead.
 
 ## PDK versions
 

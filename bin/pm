@@ -90,6 +90,14 @@ ensure_bundle() {
 
 git_m() { git -C "${MODULE_ROOT}" "$@"; }
 
+# OWNER/REPO of a GitHub remote (empty if missing or not on GitHub).
+github_repo() {
+    local url
+    url="$(git_m remote get-url "$1" 2>/dev/null || true)"
+    [[ "${url}" =~ github\.com[:/]([^/]+/[^/]+)$ ]] || return 0
+    printf '%s' "${BASH_REMATCH[1]%.git}"
+}
+
 default_branch() {
     local remote="$1" ref
     ref="$(git_m symbolic-ref --quiet "refs/remotes/${remote}/HEAD" 2>/dev/null || true)"
@@ -128,7 +136,7 @@ cmd_setup() {
         info "Fetching upstream"
         git_m fetch --quiet upstream || warn "could not fetch upstream."
     else
-        warn "remote 'upstream' is missing; add it with: git remote add upstream https://github.com/${GEPPETTO_UPSTREAM_OWNER:-puppetlabs}/<module>.git"
+        warn "remote 'upstream' is missing; add it with: git remote add upstream https://github.com/<owner>/<repo>.git"
     fi
     git_m fetch --quiet origin || warn "could not fetch origin."
     check_pdk_match
@@ -269,16 +277,25 @@ cmd_push() {
         fi
     done
 
+    # Transparency: every agent commit should carry an Assisted-by trailer.
+    local missing
+    missing="$(git_m log --format='%h %s%x09%(trailers:key=Assisted-by,valueonly,separator=%x2C)' "${range}" \
+        | awk -F '\t' '$2 == "" {print "  " $1}')"
+    if [[ -n "${missing}" ]]; then
+        warn "these commits have no 'Assisted-by:' trailer (see AGENTS.md):"
+        printf '%s\n' "${missing}" >&2
+    fi
+
     info "Pushing ${branch} to origin"
     git_m push --set-upstream origin "HEAD:refs/heads/${branch}"
 
-    local owner module upstream_owner
-    owner="${GEPPETTO_GITHUB_OWNER:-}"
-    module="$(basename "$(git_m remote get-url origin)" .git)"
-    upstream_owner="${GEPPETTO_UPSTREAM_OWNER:-puppetlabs}"
-    if [[ -n "${owner}" && "${base_ref}" == upstream ]]; then
+    # Compare link: upstream default branch ... fork branch.
+    local fork_repo upstream_repo
+    fork_repo="$(github_repo origin)"
+    upstream_repo="$(github_repo upstream)"
+    if [[ -n "${fork_repo}" && -n "${upstream_repo}" ]]; then
         info "Ready for review. Compare against upstream:"
-        echo "    https://github.com/${upstream_owner}/${module}/compare/$(default_branch upstream)...${owner}:${module}:${branch}"
+        echo "    https://github.com/${upstream_repo}/compare/$(default_branch upstream)...${fork_repo%%/*}:${fork_repo#*/}:${branch}"
     fi
 }
 

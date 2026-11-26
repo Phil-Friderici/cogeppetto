@@ -2,7 +2,7 @@
 
 You are an AI agent working in a Geppetto container on a Puppet module. The module
 checkout is your current working directory (`/workspace/<task>`). It is a clone of the
-operator's **fork**; `upstream` points to the original repository (usually `puppetlabs`).
+operator's **fork**; `upstream` points to the repository it was forked from (usually `puppetlabs`).
 
 ## Workflow
 
@@ -11,6 +11,15 @@ operator's **fork**; `upstream` points to the original repository (usually `pupp
 3. `pm branch <topic>` – start work on `agent/<topic>`, branched from the upstream
    default branch. Use a short, descriptive topic, e.g. `issue-123` or `fix-windows-path`.
 4. Make the change. Keep commits focused, with clear messages that explain *why*.
+   End every commit message with a trailer that names you as the assisting agent:
+
+   ```
+   Assisted-by: <agent name> (Geppetto)
+   ```
+
+   for example `Assisted-by: GitHub Copilot CLI (Geppetto)`. Commits are authored with
+   the operator's identity, who reviews and takes responsibility for them; the trailer
+   keeps your involvement visible. `pm push` warns about commits without it.
 5. `pm validate` and `pm unit` – both must pass.
 6. `pm acceptance` – run it when the change affects behaviour on real systems and the
    module has acceptance tests. It provisions Docker containers, installs Puppet, runs

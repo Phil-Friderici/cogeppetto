@@ -17,7 +17,7 @@ IMAGE_REPO="geppetto"
 PASSTHROUGH_VARS=(
     GH_TOKEN PUPPET_FORGE_TOKEN
     GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
-    GEPPETTO_GITHUB_OWNER GEPPETTO_UPSTREAM_OWNER GEPPETTO_COLLECTION
+    GEPPETTO_GITHUB_OWNER GEPPETTO_COLLECTION
     BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM
 )
 
@@ -46,7 +46,7 @@ Pinocchios
         --name TASK            Task name (default: MODULE); container pinocchio-TASK
         --pdk VERSION          Override the PDK version from metadata.json
         --agent AGENT          copilot | claude | codex | shell (default: GEPPETTO_AGENT)
-        --upstream OWNER       Upstream owner (default: GEPPETTO_UPSTREAM_OWNER)
+        --upstream OWNER[/REPO]  Upstream repository (default: the fork's parent on GitHub)
         --detach               Start the container without attaching
   attach TASK [--agent AGENT]  Attach an agent to a running Pinocchio
   shell TASK                   Open a shell in a running Pinocchio
@@ -70,13 +70,12 @@ load_env() {
     GEPPETTO_DEFAULT_PDK="${GEPPETTO_DEFAULT_PDK:-4.0.1}"
     GEPPETTO_AGENTS="${GEPPETTO_AGENTS:-copilot}"
     GEPPETTO_AGENT="${GEPPETTO_AGENT:-copilot}"
-    GEPPETTO_UPSTREAM_OWNER="${GEPPETTO_UPSTREAM_OWNER:-puppetlabs}"
     GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-${GIT_AUTHOR_NAME:-}}"
     GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL:-}}"
     if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
         BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM="forge-key:${PUPPET_FORGE_TOKEN}"
     fi
-    export GEPPETTO_UPSTREAM_OWNER GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL \
+    export GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL \
         BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM
 }
 
@@ -204,23 +203,50 @@ detect_pdk_version() {
     printf '%s' "${version}"
 }
 
+# Print OWNER/REPO of the repository a GitHub fork was created from (empty if none).
+fork_parent() {
+    local repo="$1" auth=()
+    [[ -n "${GH_TOKEN:-}" ]] && auth=(--header "Authorization: Bearer ${GH_TOKEN}")
+    curl --fail --silent --show-error "${auth[@]}" \
+        --header "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${repo}" \
+        | jq -r '.parent.full_name // empty'
+}
+
 prepare_checkout() {
-    local module="$1" dir="$2" upstream_owner="$3"
+    local module="$1" dir="$2" upstream="$3"
     [[ -n "${GEPPETTO_GITHUB_OWNER:-}" ]] || die "GEPPETTO_GITHUB_OWNER is not set in ${ENV_FILE}."
+    local fork="${GEPPETTO_GITHUB_OWNER}/${module}"
 
     if [[ -d "${dir}/.git" ]]; then
         info "Using existing checkout ${dir}"
+        [[ -z "${upstream}" ]] || warn "--upstream is ignored for an existing checkout."
         return
     fi
     [[ ! -e "${dir}" ]] || die "${dir} exists but is not a git checkout."
 
-    info "Cloning ${GEPPETTO_GITHUB_OWNER}/${module} into ${dir}"
-    git_with_token clone "https://github.com/${GEPPETTO_GITHUB_OWNER}/${module}.git" "${dir}" \
-        || die "clone failed. Does the fork ${GEPPETTO_GITHUB_OWNER}/${module} exist and is it in your token?"
-    git -C "${dir}" remote add upstream "https://github.com/${upstream_owner}/${module}.git"
+    # Upstream: explicit --upstream OWNER[/REPO], otherwise the fork's parent on GitHub.
+    if [[ -n "${upstream}" && "${upstream}" != */* ]]; then
+        upstream="${upstream}/${module}"
+    fi
+    if [[ -z "${upstream}" ]]; then
+        upstream="$(fork_parent "${fork}")" \
+            || die "cannot read ${fork} from the GitHub API. Does the fork exist and is it in your token?"
+    fi
+
+    info "Cloning ${fork} into ${dir}"
+    git_with_token clone "https://github.com/${fork}.git" "${dir}" \
+        || die "clone failed. Does the fork ${fork} exist and is it in your token?"
+
+    if [[ -z "${upstream}" ]]; then
+        warn "${fork} is not a GitHub fork and no --upstream was given; working with origin only."
+        return
+    fi
+    info "Upstream: ${upstream}"
+    git -C "${dir}" remote add upstream "https://github.com/${upstream}.git"
     git -C "${dir}" remote set-url --push upstream DISABLED
     git_with_token -C "${dir}" fetch --quiet upstream \
-        || warn "could not fetch upstream ${upstream_owner}/${module}."
+        || warn "could not fetch upstream ${upstream}."
 }
 
 cmd_start() {
@@ -230,7 +256,7 @@ cmd_start() {
             --name) task="${2:?--name needs a value}"; shift 2 ;;
             --pdk) pdk="${2:?--pdk needs a version}"; shift 2 ;;
             --agent) agent="${2:?--agent needs a value}"; shift 2 ;;
-            --upstream) upstream="${2:?--upstream needs an owner}"; shift 2 ;;
+            --upstream) upstream="${2:?--upstream needs OWNER or OWNER/REPO}"; shift 2 ;;
             --detach) detach=1; shift ;;
             -*) die "start: unknown option '$1'." ;;
             *) [[ -z "${module}" ]] || die "start: only one module allowed."; module="$1"; shift ;;
@@ -241,7 +267,6 @@ cmd_start() {
     require_docker
     task="${task:-${module}}"
     agent="${agent:-${GEPPETTO_AGENT}}"
-    upstream="${upstream:-${GEPPETTO_UPSTREAM_OWNER}}"
     valid_name "${module}"
     valid_name "${task}"
     agent_command "${agent}" >/dev/null
