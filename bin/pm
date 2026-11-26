@@ -417,9 +417,9 @@ acceptance_all_sets() {
     for set in "${order[@]}"; do
         echo
         info "===== Set '${set}' ====="
-        [[ -n "${set_skipped[${set}]:-}" ]] && warn "skipping images not found in the registry: ${set_skipped[${set}]}"
+        [[ -n "${set_skipped[${set}]:-}" ]] && warn "images missing from the registry: ${set_skipped[${set}]% }"
         if [[ -z "${set_images[${set}]:-}" ]]; then
-            results+=("${set}: SKIPPED (no available images)")
+            results+=("${set}: MISSING (no image in the registry: ${set_skipped[${set}]% })")
             continue
         fi
         args=()
@@ -430,10 +430,12 @@ acceptance_all_sets() {
         ( set -e; cmd_acceptance "${args[@]}" )
         rc=$?
         set -e
+        local missing_note=""
+        [[ -n "${set_skipped[${set}]:-}" ]] && missing_note="; missing: ${set_skipped[${set}]% }"
         if ((rc == 0)); then
-            results+=("${set}: OK (${set_images[${set}]% })")
+            results+=("${set}: OK (${set_images[${set}]% }${missing_note})")
         else
-            results+=("${set}: FAILED (${set_images[${set}]% })"); failed=1
+            results+=("${set}: FAILED (${set_images[${set}]% }${missing_note})"); failed=1
         fi
     done
 

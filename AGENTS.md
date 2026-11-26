@@ -121,7 +121,7 @@ git fetch upstream pull/456/head:pr-456     # check out an upstream PR locally
   internal, `vagrant` is not available yet).
 - `pm acceptance --all-sets` runs every usable Docker set one after another and prints a
   summary; use it when a change can behave differently across platforms. Report sets or
-  images that failed or were skipped, and do not remove them from `provision.yaml`.
+  images that failed or are missing from the registry, and do not remove them from `provision.yaml`.
 - `pm acceptance --set <name>` selects another set from `provision.yaml`;
   `pm acceptance --image litmusimage/ubuntu:22.04` tests a single Docker image without
   touching `provision.yaml` (e.g. when the default set's platform has no Puppet 9 agent);
