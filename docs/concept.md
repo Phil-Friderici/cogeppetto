@@ -141,7 +141,7 @@ pm push         push branch agent/<topic> to the fork (secret check, trailer war
 - One token covers all forks of one owner. New forks are added to the token.
 - The token automatically has read access to all public repos. Agents can read code, issues and PRs from `puppetlabs`, with 5,000 instead of 60 API requests per hour.
 - Put the expiry date in your calendar.
-- Copilot authentication is separate and happens via `/login` in the CLI.
+- Copilot uses its own token, `COPILOT_GITHUB_TOKEN` (fine-grained PAT owned by the personal account, permission "Copilot Requests"); see section 6.
 
 **Remotes per module:**
 ```
