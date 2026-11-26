@@ -162,9 +162,18 @@ One per-user **Forge API key** (`PUPPET_FORGE_TOKEN`) covers all three Puppet Co
 | `puppet`, `facter`, `bolt` gems from `rubygems-puppetcore.puppet.com` | bundle install, unit and acceptance tests | module `Gemfile` switches to puppetcore when `PUPPET_FORGE_TOKEN` is set. PDK runs Bundler without any `BUNDLE_*` variables and with `BUNDLE_IGNORE_CONFIG=1`, so neither `BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM` nor `~/.bundle/config` work. Instead `~/.gemfile` (evaluated by every PDK-templated Gemfile) sets `forge-key:<key>` in Bundler's in-memory settings from `PUPPET_FORGE_TOKEN`; the file contains no secret |
 | Puppet Core agent on test targets | `litmus:install_agent` | Litmus reads `PUPPET_FORGE_TOKEN` from the environment; `puppetcore*` collections fail without it |
 
+**Gem world depends on the PDK version** (verified with `puppetlabs-motd`, 2026-11-26):
+
+| PDK | Puppet shipped | Gem source | Default agent collection |
+|---|---|---|---|
+| 3.x (e.g. 3.5.1) | 8.10.0 (last public release), Ruby 3.2 | public rubygems.org | `puppet8` |
+| 4.x (e.g. 4.0.1) | 9.1.0 (Ruby 4.0) by default, 8.22.0 (Ruby 3.2) via `--puppet-version 8` | Puppet Core | `puppetcore8` |
+
+PDK 3.x cannot use Puppet Core gems: all Puppet Core `bolt` releases need Puppet ≥ 8.11, and PDK only selects Puppet versions it ships itself. `pm` therefore chooses the gem world automatically (`GEPPETTO_GEM_SOURCE=auto`); in the public world it hides `PUPPET_FORGE_TOKEN` from PDK, Bundler and Litmus, because the module `Gemfile` switches to Puppet Core whenever the variable is set. `GEPPETTO_GEM_SOURCE=puppetcore|public` overrides the choice, and `pm info` shows which world is active and why.
+
 **Consequences and handling:**
-- The key is needed **at runtime** in the container, not only at build time.
-- Without the key, the module `Gemfile` falls back to the public gems on rubygems.org. Tests then run against an older public Puppet version, so results can differ from CI. `pm` should report which source is active.
+- The key is needed **at runtime** in the container (PDK 4.x), not only at build time.
+- In the public world (PDK 3.x, or no key), tests run against Puppet 8.10.0, so results can differ from a CI that uses current Puppet Core.
 - The key lives in `~/geppetto/.env` (mode 0600), per user, alongside `GH_TOKEN`, and is passed to the container as an environment variable. It is not written to disk anywhere else.
 - The key is passed to Litmus test targets as a task parameter. Those targets are disposable, which is acceptable.
 - Mitigations: `AGENTS.md` forbids printing or committing secrets; `pm push` refuses to push commits that contain the token values; the key is per user and can be revoked and regenerated on the Forge.
@@ -224,15 +233,16 @@ docs/concept.md             this document
 
 - Are there ready-made Windows or Solaris test VMs, and can they be reset?
 - Which Solaris versions are relevant (hopefully x86 only)?
-- Which older PDK versions are needed, and which repo do they come from? Are there packages for Ubuntu 24.04, or is an older base required? (First concrete case: PDK 3.5.1 for motd.)
+- Which older PDK versions are needed besides 3.5.1? (3.5.1 and 4.0.1 are both available from Puppet Core for Ubuntu 24.04.)
+- Should agents test against Puppet 8 or Puppet 9 by default with PDK 4.x (`--puppet-version 8`)?
 - Which current `litmusimage/*` images to use for motd instead of the outdated ones.
-- Which collection `pm acceptance` should install by default (`puppetcore8`?), and whether it should be configurable per module.
+- Whether the acceptance collection should follow the Puppet version under test (`puppetcore8` vs. `puppetcore9`).
 
 ## 15. Next steps
 
 1. ~~Create the repo `geppetto` with the first version of all files.~~ Done.
-2. On the host: `geppetto build --pdk 3.5.1` and `--pdk 4.0.1` (verifies the PDK download and which versions exist).
-3. `geppetto start puppetlabs-motd`: automatic PDK detection, Copilot login, `pm validate` / `pm unit`, with and without `PUPPET_FORGE_TOKEN`.
+2. ~~On the host: `geppetto build --pdk 3.5.1` and `--pdk 4.0.1`.~~ Done: both build.
+3. `geppetto start puppetlabs-motd`: automatic PDK detection ✔, `pm setup` / `validate` / `unit` with PDK 3.5.1 and public gems ✔, `pm setup` with PDK 4.0.1 and Puppet Core ✔. Open: Copilot login, `validate` / `unit` with PDK 4.0.1.
 4. `pm acceptance` with the Docker backend and a puppetcore agent.
 5. `geppetto protect` and `pm push` end to end.
 6. `pm pdk-update`: upgrade motd from PDK 3.5.1 to 4.0.1.

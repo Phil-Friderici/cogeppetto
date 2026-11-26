@@ -24,7 +24,7 @@ Usage: pm <command> [options]
       --set NAME            provision.yaml set to use (default: default)
       --inventory FILE      Test existing machines from FILE instead of provisioning
       --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
-                            puppetcore8 with PUPPET_FORGE_TOKEN, else puppet8)
+                            puppetcore8 for Puppet Core gems, else puppet8)
       --keep                Keep the test machines after the run (no tear down)
   pdk-update [--noop]       Update the module to this container's PDK, then validate + unit
   push                      Push the current agent/* branch to your fork
@@ -49,11 +49,42 @@ find_module_root() {
 module_pdk_version() { jq -r '."pdk-version" // empty' "${MODULE_ROOT}/metadata.json"; }
 container_pdk_version() { pdk --version 2>/dev/null | tail -n 1; }
 
+# Which gem world to use: Puppet Core or public rubygems.org.
+#
+# PDK 3.x ships Puppet 8.10.0, the last public release; Puppet Core's gems (bolt in
+# particular) need Puppet >= 8.11, so PDK 3.x only works with the public gems.
+# PDK 4.x ships Puppet 8.22 and 9.x and works with Puppet Core.
+# GEPPETTO_GEM_SOURCE=auto (default) | puppetcore | public overrides the choice.
+GEM_WORLD=""
+GEM_WORLD_REASON=""
+
+decide_gem_world() {
+    local wanted="${GEPPETTO_GEM_SOURCE:-auto}" major
+    major="$(container_pdk_version | cut -d. -f1)"
+    case "${wanted}" in
+        public)
+            GEM_WORLD=public; GEM_WORLD_REASON="GEPPETTO_GEM_SOURCE=public" ;;
+        puppetcore)
+            GEM_WORLD=puppetcore; GEM_WORLD_REASON="GEPPETTO_GEM_SOURCE=puppetcore" ;;
+        auto)
+            if [[ "${major}" =~ ^[0-9]+$ ]] && ((major < 4)); then
+                GEM_WORLD=public
+                GEM_WORLD_REASON="PDK ${major}.x ships Puppet 8.10, which Puppet Core gems do not support"
+            else
+                GEM_WORLD=puppetcore; GEM_WORLD_REASON="PDK ${major}.x"
+            fi ;;
+        *) die "GEPPETTO_GEM_SOURCE must be auto, puppetcore or public (is '${wanted}')." ;;
+    esac
+    if [[ "${GEM_WORLD}" == puppetcore && -z "${FORGE_TOKEN}" ]]; then
+        GEM_WORLD=public; GEM_WORLD_REASON="no PUPPET_FORGE_TOKEN"
+    fi
+}
+
 gem_source() {
-    if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
-        echo "puppetcore (rubygems-puppetcore.puppet.com)"
+    if [[ "${GEM_WORLD}" == puppetcore ]]; then
+        echo "puppetcore (rubygems-puppetcore.puppet.com; ${GEM_WORLD_REASON})"
     else
-        echo "public rubygems.org (no PUPPET_FORGE_TOKEN; older public Puppet gems)"
+        echo "public rubygems.org (${GEM_WORLD_REASON})"
     fi
 }
 
@@ -94,7 +125,15 @@ RUBY
 }
 
 prepare_env() {
+    # Keep the key for the secret check in `pm push`, whatever the gem world.
+    FORGE_TOKEN="${PUPPET_FORGE_TOKEN:-}"
+    decide_gem_world
     sync_bundle_credentials
+    # The module Gemfile switches to Puppet Core whenever PUPPET_FORGE_TOKEN is set,
+    # so hide it from PDK, Bundler and Litmus in the public gem world.
+    if [[ "${GEM_WORLD}" == public ]]; then
+        unset PUPPET_FORGE_TOKEN
+    fi
 }
 
 check_pdk_match() {
@@ -112,10 +151,10 @@ ensure_bundle() {
     local force="${1:-}"
     local marker="${MODULE_ROOT}/.bundle/geppetto-pdk-version"
     local current
-    current="$(container_pdk_version)"
+    current="$(container_pdk_version) ${GEM_WORLD}"
     if [[ -n "${force}" || ! -f "${marker}" || "$(cat "${marker}")" != "${current}" \
           || "${MODULE_ROOT}/Gemfile" -nt "${marker}" ]]; then
-        info "Installing bundle for PDK ${current} (gems: $(gem_source))"
+        info "Installing bundle for PDK $(container_pdk_version) (gems: $(gem_source))"
         (cd "${MODULE_ROOT}" && pdk bundle install)
         mkdir -p "$(dirname "${marker}")"
         echo "${current}" > "${marker}"
@@ -230,10 +269,10 @@ cmd_acceptance() {
         esac
     done
     if [[ -z "${collection}" ]]; then
-        if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then collection=puppetcore8; else collection=puppet8; fi
+        if [[ "${GEM_WORLD}" == puppetcore ]]; then collection=puppetcore8; else collection=puppet8; fi
     fi
-    if [[ "${collection}" == puppetcore* && -z "${PUPPET_FORGE_TOKEN:-}" ]]; then
-        die "collection ${collection} needs PUPPET_FORGE_TOKEN."
+    if [[ "${collection}" == puppetcore* && "${GEM_WORLD}" != puppetcore ]]; then
+        die "collection ${collection} needs the Puppet Core gem world ($(gem_source))."
     fi
     [[ -d "${MODULE_ROOT}/spec/acceptance" ]] || die "module has no spec/acceptance directory."
 
@@ -304,10 +343,10 @@ cmd_push() {
     local base
     base="$(git_m merge-base HEAD "${base_ref}/$(default_branch "${base_ref}")" 2>/dev/null || true)"
     local range="${base:+${base}..}HEAD" var
-    for var in GH_TOKEN PUPPET_FORGE_TOKEN; do
+    for var in GH_TOKEN FORGE_TOKEN; do
         # Process substitution: with pipefail, `git log | grep -q` would report SIGPIPE.
         if [[ -n "${!var:-}" ]] && grep -qF -- "${!var}" <(git_m log -p "${range}"); then
-            die "the commits contain the value of ${var}. Remove it from the history before pushing."
+            die "the commits contain a token (${var/#FORGE_TOKEN/PUPPET_FORGE_TOKEN}). Remove it from the history before pushing."
         fi
     done
 

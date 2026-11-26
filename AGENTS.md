@@ -63,3 +63,5 @@ git fetch upstream pull/456/head:pr-456     # check out an upstream PR locally
   `--keep` leaves the test machines running for debugging.
 - If `pm` warns that the module's PDK version differs from the container's, mention it
   in your summary. Only upgrade the module with `pm pdk-update` when asked to.
+- Call `pdk` only through `pm`: `pm` picks the right gem source (Puppet Core or public)
+  for this PDK version. PDK arguments pass through, e.g. `pm unit --puppet-version 8`.
