@@ -167,9 +167,17 @@ ensure_bundle() {
     local marker="${MODULE_ROOT}/.bundle/geppetto-pdk-version"
     local current
     current="$(container_pdk_version) ${GEM_WORLD}"
+    local reason=""
     if [[ -n "${force}" || ! -f "${marker}" || "$(cat "${marker}")" != "${current}" \
           || "${MODULE_ROOT}/Gemfile" -nt "${marker}" ]]; then
-        info "Installing bundle for PDK $(container_pdk_version) (gems: $(gem_source))"
+        reason=" "
+    # A run with another Puppet version (e.g. pm unit --puppet-version 8) re-resolves
+    # the bundle; later commands run with PDK's default Puppet and need it back.
+    elif ! (cd "${MODULE_ROOT}" && pdk_run bundle check) >/dev/null 2>&1; then
+        reason=" (gems changed, e.g. after a run with another Puppet version)"
+    fi
+    if [[ -n "${reason}" ]]; then
+        info "Installing bundle for PDK $(container_pdk_version) (gems: $(gem_source))${reason% }"
         (cd "${MODULE_ROOT}" && pdk_run bundle install)
         mkdir -p "$(dirname "${marker}")"
         echo "${current}" > "${marker}"
