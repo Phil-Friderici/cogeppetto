@@ -57,15 +57,37 @@ Configuration lives in ~/geppetto/.env (override with GEPPETTO_HOME).
 EOF
 }
 
+# Read KEY=value lines without executing anything. Values may contain spaces and may
+# be wrapped in single or double quotes; blank lines, "# comments" and trailing
+# " # comments" are ignored. Every key is exported.
+read_env_file() {
+    local file="$1" line key value n=0
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        n=$((n + 1))
+        line="${line#"${line%%[![:space:]]*}"}"            # trim leading whitespace
+        [[ -z "${line}" || "${line}" == \#* ]] && continue
+        line="${line#export }"
+        [[ "${line}" == *=* ]] || die "${file}:${n}: expected KEY=value."
+        key="${line%%=*}"
+        value="${line#*=}"
+        [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${file}:${n}: invalid key '${key}'."
+        if [[ "${value}" =~ ^\"(.*)\"[[:space:]]*(#.*)?$ || "${value}" =~ ^\'(.*)\'[[:space:]]*(#.*)?$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        else
+            value="${value%%[[:space:]]#*}"                  # strip trailing " # comment"
+            value="${value%"${value##*[![:space:]]}"}"      # trim trailing whitespace
+        fi
+        printf -v "${key}" '%s' "${value}"
+        export "${key?}"
+    done < "${file}"
+}
+
 load_env() {
     [[ -f "${ENV_FILE}" ]] || die "${ENV_FILE} not found; run 'geppetto init' first."
     local mode
     mode="$(stat -c '%a' "${ENV_FILE}")"
     [[ "${mode}" == "600" ]] || warn "${ENV_FILE} has mode ${mode}; it contains secrets, use 'chmod 600'."
-    set -a
-    # shellcheck disable=SC1090
-    source "${ENV_FILE}"
-    set +a
+    read_env_file "${ENV_FILE}"
 
     GEPPETTO_DEFAULT_PDK="${GEPPETTO_DEFAULT_PDK:-4.0.1}"
     GEPPETTO_AGENTS="${GEPPETTO_AGENTS:-copilot}"
