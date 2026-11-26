@@ -123,7 +123,8 @@ Each PDK version gets its own image (`geppetto:pdk-<version>`). `geppetto start`
 The gem source follows the PDK version: PDK 3.x ships Puppet 8.10.0, the last public
 release, and uses the public gems from rubygems.org; PDK 4.x ships Puppet 9 (default) and
 8.22 and uses Puppet Core. `pm info` shows the active source; `GEPPETTO_GEM_SOURCE` in
-`.env` overrides it. With PDK 4.x, test against Puppet 8 with `pm unit --puppet-version 8`.
+`.env` overrides it. With PDK 4.x, tests run against Puppet 9 by default (the target for all modules);
+add `--puppet-version 8` to test Puppet 8 as well, e.g. `pm unit --puppet-version 8`.
 To move a module to a newer PDK:
 
 ```bash

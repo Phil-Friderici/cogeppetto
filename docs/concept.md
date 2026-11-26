@@ -167,7 +167,9 @@ One per-user **Forge API key** (`PUPPET_FORGE_TOKEN`) covers all three Puppet Co
 | PDK | Puppet shipped | Gem source | Default agent collection |
 |---|---|---|---|
 | 3.x (e.g. 3.5.1) | 8.10.0 (last public release), Ruby 3.2 | public rubygems.org | `puppet8` |
-| 4.x (e.g. 4.0.1) | 9.1.0 (Ruby 4.0) by default, 8.22.0 (Ruby 3.2) via `--puppet-version 8` | Puppet Core | `puppetcore8` |
+| 4.x (e.g. 4.0.1) | 9.1.0 (Ruby 4.0) by default, 8.22.0 (Ruby 3.2) via `--puppet-version 8` | Puppet Core | `puppetcore9` |
+
+**Puppet 9 is the target** for all modules: with PDK 4.x agents test against Puppet 9 (PDK's default) and install `puppetcore9` on acceptance targets. While a module's `metadata.json` still lists Puppet 8, agents additionally run `validate` and `unit` with `--puppet-version 8`. Moving to Puppet 9 usually also means updating `provision.yaml` and the supported operating systems, because Puppet 9 agents are not available for old platforms such as CentOS 7.
 
 PDK 3.x cannot use Puppet Core gems: all Puppet Core `bolt` releases need Puppet ≥ 8.11, and PDK only selects Puppet versions it ships itself. `pm` therefore chooses the gem world automatically (`GEPPETTO_GEM_SOURCE=auto`); in the public world it hides `PUPPET_FORGE_TOKEN` from PDK, Bundler and Litmus, because the module `Gemfile` switches to Puppet Core whenever the variable is set. `GEPPETTO_GEM_SOURCE=puppetcore|public` overrides the choice, and `pm info` shows which world is active and why.
 
@@ -234,9 +236,8 @@ docs/concept.md             this document
 - Are there ready-made Windows or Solaris test VMs, and can they be reset?
 - Which Solaris versions are relevant (hopefully x86 only)?
 - Which older PDK versions are needed besides 3.5.1? (3.5.1 and 4.0.1 are both available from Puppet Core for Ubuntu 24.04.)
-- Should agents test against Puppet 8 or Puppet 9 by default with PDK 4.x (`--puppet-version 8`)?
 - Which current `litmusimage/*` images to use for motd instead of the outdated ones.
-- Whether the acceptance collection should follow the Puppet version under test (`puppetcore8` vs. `puppetcore9`).
+- Does Litmus 2.8.2 / `puppet_agent` already support the `puppetcore9` collection? (First acceptance run.)
 
 ## 15. Next steps
 

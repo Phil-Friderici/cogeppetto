@@ -65,3 +65,7 @@ git fetch upstream pull/456/head:pr-456     # check out an upstream PR locally
   in your summary. Only upgrade the module with `pm pdk-update` when asked to.
 - Call `pdk` only through `pm`: `pm` picks the right gem source (Puppet Core or public)
   for this PDK version. PDK arguments pass through, e.g. `pm unit --puppet-version 8`.
+- With PDK 4.x, tests run against **Puppet 9** by default; that is the target for all
+  modules. If `metadata.json` still lists Puppet 8 as supported (`requirements`), also
+  run `pm validate --puppet-version 8` and `pm unit --puppet-version 8`, and report both
+  results.

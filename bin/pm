@@ -24,7 +24,7 @@ Usage: pm <command> [options]
       --set NAME            provision.yaml set to use (default: default)
       --inventory FILE      Test existing machines from FILE instead of provisioning
       --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
-                            puppetcore8 for Puppet Core gems, else puppet8)
+                            puppetcore9 for Puppet Core gems, else puppet8)
       --keep                Keep the test machines after the run (no tear down)
   pdk-update [--noop]       Update the module to this container's PDK, then validate + unit
   push                      Push the current agent/* branch to your fork
@@ -269,7 +269,8 @@ cmd_acceptance() {
         esac
     done
     if [[ -z "${collection}" ]]; then
-        if [[ "${GEM_WORLD}" == puppetcore ]]; then collection=puppetcore8; else collection=puppet8; fi
+        # Follow the Puppet version PDK uses by default: 9 with PDK 4.x, 8.10 with PDK 3.x.
+        if [[ "${GEM_WORLD}" == puppetcore ]]; then collection=puppetcore9; else collection=puppet8; fi
     fi
     if [[ "${collection}" == puppetcore* && "${GEM_WORLD}" != puppetcore ]]; then
         die "collection ${collection} needs the Puppet Core gem world ($(gem_source))."
