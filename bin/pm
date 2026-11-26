@@ -444,7 +444,7 @@ apply_once() {
     local cmd="/opt/puppetlabs/bin/puppet apply --detailed-exitcodes --color=false ${noop:+--noop} ${remote}"
     json="$(bolt_run command run "${cmd}" --format json || true)"
     [[ -n "${json}" ]] || die "bolt returned no result; is the test machine still running? (pm target up)"
-    jq -r '.items[] | "--- \(.target)", ((.value.stdout, .value.stderr) // empty | select(. != ""))' <<<"${json}"
+    jq -r '.items[] | "--- \(.target)", ((.value.stdout, .value.stderr, .value._error.msg) // empty | select(. != ""))' <<<"${json}"
     APPLY_CODES="$(jq -r '[.items[] | (.value.exit_code // 1)] | map(tostring) | join(" ")' <<<"${json}")"
 }
 
