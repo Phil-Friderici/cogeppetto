@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Geppetto workshop image. Built by `bin/geppetto build`; one image per PDK version
+# CoGeppetto workshop image. Built by `bin/geppetto build`; one image per PDK version
 # (tag geppetto:pdk-<version>).
 #
 #   PDK_VERSION  PDK release to install, e.g. 4.0.1 or 3.5.1 (required)
@@ -62,7 +62,7 @@ ARG AGENTS=copilot
 ARG NODE_MAJOR=22
 ARG DEBIAN_FRONTEND=noninteractive
 
-LABEL org.opencontainers.image.title="geppetto" \
+LABEL org.opencontainers.image.title="CoGeppetto" \
       org.opencontainers.image.description="A workshop where AI agents craft Puppet modules" \
       geppetto.pdk-version="${PDK_VERSION}" \
       geppetto.agents="${AGENTS}"

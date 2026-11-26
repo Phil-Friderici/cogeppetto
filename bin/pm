@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pm – Puppet module commands inside a Pinocchio.
+# pm – Puppet module commands inside a Pinocchio (CoGeppetto).
 #
 # One uniform interface for every agent: clear output, meaningful exit codes.
 # Run from anywhere inside a module checkout. `pm help` for usage.
@@ -14,6 +14,9 @@ warn() { printf 'pm: warning: %s\n' "$*" >&2; }
 usage() {
     cat <<'EOF'
 Usage: pm <command> [options]
+
+Puppet module commands for agents in a CoGeppetto Pinocchio. Test order:
+validate -> unit -> apply -> acceptance; then push.
 
   info                      Show module, PDK versions, gem source, branch and remotes
   setup                     Check remotes, fetch upstream, install the bundle
@@ -116,12 +119,13 @@ gem_source() {
 # module Gemfile, which (like every PDK-templated Gemfile) evaluates ~/.gemfile.
 # ~/.gemfile therefore sets the credentials in Bundler's in-memory settings from
 # PUPPET_FORGE_TOKEN. The file itself contains no secret.
+# Marker text kept from before the rename to CoGeppetto, so existing files stay recognised.
 GEMFILE_MARKER='# Managed by Geppetto (pm): Puppet Core credentials'
 
 sync_bundle_credentials() {
     local gemfile="${HOME}/.gemfile"
     if [[ -f "${gemfile}" ]] && ! grep -qF "${GEMFILE_MARKER}" "${gemfile}"; then
-        warn "${gemfile} exists and is not managed by Geppetto; Puppet Core credentials not configured."
+        warn "${gemfile} exists and is not managed by CoGeppetto (pm); Puppet Core credentials not configured."
     else
         cat > "${gemfile}" <<RUBY
 ${GEMFILE_MARKER}
@@ -406,7 +410,7 @@ cmd_sets() {
         printf '%-24s %-18s %-44s %s\n' "${set}" "${prov}" "${image}" "${status}"
     done < <(list_set_images)
     echo
-    info "${n_ok} available, ${n_missing} not found, ${n_other} not usable with Geppetto's docker backend"
+    info "${n_ok} available, ${n_missing} not found, ${n_other} not usable with CoGeppetto's docker backend"
     info "Available means the image exists; whether collection $(default_collection) has an agent for it shows only at install time."
 }
 

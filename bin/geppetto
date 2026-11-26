@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# geppetto – host command for the Geppetto workshop.
+# geppetto – host command of CoGeppetto: Geppetto is the workshop.
 #
 # Builds the workshop images and starts Pinocchios (agent containers) that work
 # on Puppet modules in your own GitHub forks. Run `geppetto help` for usage.
@@ -29,6 +29,9 @@ warn() { printf 'geppetto: warning: %s\n' "$*" >&2; }
 usage() {
     cat <<'EOF'
 Usage: geppetto <command> [options]
+
+CoGeppetto – a workshop where AI agents craft Puppet modules. geppetto builds the
+workshop images and starts Pinocchios: agent containers working on your forks.
 
 Setup
   init                         Create ~/geppetto (workspace, home, .env)

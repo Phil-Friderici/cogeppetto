@@ -1,8 +1,9 @@
-# Geppetto
+# CoGeppetto
 
 *A workshop where AI agents craft Puppet modules.*
 
-Geppetto is the workshop: a Docker image with PDK, Litmus tooling, Git, the GitHub CLI
+"Co" as in co-author: agents do the work, you review it and decide what goes upstream.
+Inside CoGeppetto, **Geppetto** is the workshop and its command (`geppetto`): a Docker image with PDK, Litmus tooling, Git, the GitHub CLI
 and AI agent CLIs. **Pinocchios** are the agent containers that work on your module
 forks. They work on their own, but stay on Geppetto's strings: a token that only reaches
 your own forks, a protected default branch, and your review before anything goes
@@ -30,21 +31,21 @@ See [docs/concept.md](docs/concept.md) for the design and its reasoning.
   resource owner = your account, repository access = only your module forks,
   permissions **Contents: Read and write** and **Workflows: Read and write**, nothing
   else (Workflows is needed to push changes to `.github/workflows/`, e.g. after
-  `pm pdk-update`). Use a dedicated token for Geppetto.
+  `pm pdk-update`). Use a dedicated token for CoGeppetto.
 - An account for the agent you use (e.g. GitHub Copilot). For Copilot, a second
   fine-grained token with the account permission **Copilot Requests**
   (`COPILOT_GITHUB_TOKEN`) avoids logging in again after every rebuild.
 
 > **Security note:** Pinocchios get the host's Docker socket so Litmus can start test
 > containers. Anyone with access to that socket is effectively root on the host. Run
-> Geppetto only on a host dedicated to this purpose and share it only with people you
+> CoGeppetto only on a host dedicated to this purpose and share it only with people you
 > trust.
 
 ## Setup
 
 ```bash
-git clone https://github.com/Phil-Friderici/geppetto.git ~/geppetto-src
-ln -s ~/geppetto-src/bin/geppetto ~/.local/bin/geppetto   # or add bin/ to PATH
+git clone https://github.com/Phil-Friderici/cogeppetto.git ~/cogeppetto-src
+ln -s ~/cogeppetto-src/bin/geppetto ~/.local/bin/geppetto   # or add bin/ to PATH
 
 geppetto init            # creates ~/geppetto/{workspace,home,.env}
 $EDITOR ~/geppetto/.env  # tokens, your GitHub account, git identity
@@ -131,7 +132,7 @@ Images contain only programs. Rebuilding or removing containers never touches yo
 Agents commit with **your** git identity (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` in
 `.env`), because you review the work and open the pull request; GitHub, CLA and DCO
 checks then attribute the commits to you. Every agent commit ends with a trailer such as
-`Assisted-by: GitHub Copilot CLI (Geppetto)`, so reviewers can see that an agent was
+`Assisted-by: GitHub Copilot CLI (CoGeppetto)`, so reviewers can see that an agent was
 involved. If your GitHub settings block pushes that expose your email address, use your
 `users.noreply.github.com` address instead.
 
@@ -176,7 +177,7 @@ permission. Other agents: log in on first start; the login persists in `~/geppet
 | `pm push`: `Permission to <user>/<module>.git denied to <user>` (403) | The token cannot write to this fork. Check the token on GitHub: *Repository access* must list exactly this fork (similar names are easy to mix up), *Contents* must be *Read and write*, and the *Resource owner* must be your account. Test with `git push --dry-run origin HEAD:refs/heads/agent/test`. |
 | `pm push` rejected: `refusing to allow a Personal Access Token to create or update workflow` | The token needs *Workflows: Read and write*. |
 | `git push origin HEAD:main`: `GH013: Repository rule violations` | Expected: `geppetto protect` blocks direct pushes to the default branch. |
-| `Authentication is required for rubygems-puppetcore.puppet.com` | `PUPPET_FORGE_TOKEN` missing or `~/.gemfile` not managed by Geppetto (`pm info` warns). |
+| `Authentication is required for rubygems-puppetcore.puppet.com` | `PUPPET_FORGE_TOKEN` missing or `~/.gemfile` not managed by CoGeppetto (`pm info` warns). |
 | Copilot asks for `/login` again after every rebuild | Environment tokens override Copilot's stored login, and `GH_TOKEN` (the Git token) has no Copilot permission. Set `COPILOT_GITHUB_TOKEN` in `.env` (Copilot Requests permission), then `geppetto stop` / `start`. |
 | `docker ps` shows `litmusimage/*` containers after a run | Litmus leaves a container behind when provisioning fails after the container started (e.g. SSH setup). `pm` removes these itself since 2026-11-26; for older leftovers run `geppetto cleanup`. |
 | `Could not find compatible versions … bolt … puppet >= 8.11` | Puppet Core gems with PDK 3.x; leave `GEPPETTO_GEM_SOURCE` on `auto` (public gems for PDK 3.x). |

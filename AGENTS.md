@@ -1,6 +1,6 @@
 # Instructions for Pinocchios
 
-You are an AI agent working in a Geppetto container on a Puppet module. The module
+You are an AI agent working in a CoGeppetto container (a Pinocchio) on a Puppet module. The module
 checkout is your current working directory (`/workspace/<task>`). It is a clone of the
 operator's **fork**; `upstream` points to the repository it was forked from (usually `puppetlabs`).
 
@@ -14,10 +14,10 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
    End every commit message with a trailer that names you as the assisting agent:
 
    ```
-   Assisted-by: <agent name> (Geppetto)
+   Assisted-by: <agent name> (CoGeppetto)
    ```
 
-   for example `Assisted-by: GitHub Copilot CLI (Geppetto)`. Put it in the **same final
+   for example `Assisted-by: GitHub Copilot CLI (CoGeppetto)`. Put it in the **same final
    block** as any other trailers (e.g. `Co-authored-by:`), with no blank line between
    them, so git recognises all of them as trailers:
 
@@ -26,7 +26,7 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 
    Explain why here.
 
-   Assisted-by: GitHub Copilot CLI (Geppetto)
+   Assisted-by: GitHub Copilot CLI (CoGeppetto)
    Co-authored-by: Copilot <...>
    ```
 

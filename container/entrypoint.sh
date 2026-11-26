@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Geppetto container entrypoint: prepares the user identity and agent instructions,
+# CoGeppetto container entrypoint: prepares the user identity and agent instructions,
 # then runs the given command.
 set -euo pipefail
 
