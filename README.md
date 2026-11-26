@@ -94,7 +94,8 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 | `pm pdk-update [--noop]` | Move the module to the container's PDK, then validate and unit |
 | `pm push` | Push the `agent/*` branch to your fork (with a secret check) |
 
-`pm acceptance` options: `--set NAME` (set from `provision.yaml`), `--inventory FILE`
+`pm acceptance` options: `--set NAME` (set from `provision.yaml`), `--image IMAGE` (a
+Docker image instead of a set, without changing `provision.yaml`), `--inventory FILE`
 (test existing machines), `--collection NAME` (default `puppetcore8` with a Forge key),
 `--keep` (no tear down).
 

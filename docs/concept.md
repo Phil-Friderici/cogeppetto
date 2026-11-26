@@ -186,6 +186,10 @@ PDK 3.x cannot use Puppet Core gems: all Puppet Core `bolt` releases need Puppet
 
 Litmus is the successor to Beaker. It uses Bolt for connectivity (SSH or WinRM) and the `provision` module for test machines. `pm acceptance` uses the configuration the module ships with (`provision.yaml`, `spec_helper_acceptance.rb`). No separate fixture is needed.
 
+**Geppetto consumes Litmus as it is.** Litmus has accumulated technical debt and needs to be repaired separately; Geppetto does not patch or work around it, and agents report Litmus failures instead of fixing them.
+
+**Platforms are not changed by agents.** Supported and tested platforms (`operatingsystem_support` in `metadata.json`, the sets in `provision.yaml`) stay as they are unless a task explicitly asks for a change, because platform support depends on which Puppet agent versions exist and must be checked by a human first. When the module's sets cannot run (e.g. the default set is CentOS 7, which has no Puppet 9 agent), `pm acceptance --image <image>` provisions a single Docker image via `litmus:provision[docker,<image>]` without changing any file.
+
 **Interchangeable backends for test machines:**
 
 | Backend | Test machines | Status |
@@ -245,5 +249,5 @@ docs/concept.md             this document
 3. `geppetto start puppetlabs-motd`: automatic PDK detection ✔, upstream detection ✔, `pm setup` / `validate` / `unit` with PDK 3.5.1 and public gems ✔, `pm setup` with PDK 4.0.1 and Puppet Core ✔. Open: Copilot login, `validate` / `unit` with PDK 4.0.1.
 4. ~~`pm acceptance` with the Docker backend.~~ Done: PDK 3.5.1 + `puppet8` on `litmusimage/centos:7`, and PDK 4.0.1 + `puppetcore9` (Puppet 9.1.0) on `litmusimage/ubuntu:22.04`, both 6 examples, 0 failures.
 5. ~~`geppetto protect` and `pm push` end to end.~~ Done: `agent/push-test` pushed to the fork with compare link; a direct push to `main` is rejected by the ruleset (GH013).
-6. ~~First agent task with Copilot: upgrade motd to PDK 4.0.1 and Puppet 9.~~ Done (branch `agent/pdk-4-ppuppet-9-gpt6-luna`): validate, unit and acceptance pass; review notes on the platform list (sources for supported platforms) feed back into `AGENTS.md`.
+6. ~~First agent task with Copilot: upgrade motd to PDK 4.0.1 and Puppet 9.~~ Done (branch `agent/pdk-4-ppuppet-9-gpt6-luna`): validate, unit and acceptance pass. Review: the agent also rewrote the platform list without sources. Consequence: agents no longer change platforms (rule in `AGENTS.md`), and `pm acceptance --image` allows testing on a current platform without touching `provision.yaml`.
 7. Then: additional agents, `vagrant` backend with motd's Windows set.

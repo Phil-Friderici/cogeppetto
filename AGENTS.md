@@ -52,6 +52,14 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 - Do not change files managed by the PDK template (e.g. `Gemfile`, `Rakefile`,
   `.rubocop.yml`, `spec/spec_helper.rb`, CI workflows) by hand. Put customisations in
   `.sync.yml` and run `pm pdk-update`, or explain why a manual change is needed.
+- Do not change the supported or tested platforms (`operatingsystem_support` in
+  `metadata.json`, the sets in `provision.yaml`) unless the task explicitly asks for it.
+  Platform support depends on which Puppet agent versions exist for a platform, which
+  has to be checked by a human first. If you think a change is needed, say so in your
+  report instead. To run acceptance tests on a platform the module's sets do not cover,
+  use `pm acceptance --image <image>`, which changes no files.
+- Treat Litmus and the `provision` module as given tools. Do not patch, pin or work
+  around them; if they fail, report the error and stop.
 - Do not "fix" failing tests by deleting or weakening them. If a test is wrong, explain
   why in the commit message.
 - Report honestly: say which steps you ran, which passed and which failed. If you skipped
@@ -73,6 +81,8 @@ git fetch upstream pull/456/head:pr-456     # check out an upstream PR locally
 - `pm unit` covers every operating system in `metadata.json` (including Windows and
   Solaris) through facts; acceptance tests run on Linux containers only for now.
 - `pm acceptance --set <name>` selects another set from `provision.yaml`;
+  `pm acceptance --image litmusimage/ubuntu:22.04` tests a single Docker image without
+  touching `provision.yaml` (e.g. when the default set's platform has no Puppet 9 agent);
   `--keep` leaves the test machines running for debugging.
 - If `pm` warns that the module's PDK version differs from the container's, mention it
   in your summary. Only upgrade the module with `pm pdk-update` when asked to.

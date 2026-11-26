@@ -22,6 +22,9 @@ Usage: pm <command> [options]
   unit [PDK_ARGS...]        pdk test unit
   acceptance [options]      Litmus acceptance tests
       --set NAME            provision.yaml set to use (default: default)
+      --image IMAGE         Provision this Docker image instead of a provision.yaml set
+                            (repeatable), e.g. litmusimage/ubuntu:22.04; leaves the
+                            module's files unchanged
       --inventory FILE      Test existing machines from FILE instead of provisioning
       --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
                             puppetcore9 for Puppet Core gems, else puppet8)
@@ -258,15 +261,25 @@ acceptance_teardown() {
 }
 
 cmd_acceptance() {
-    local set="default" inventory="" collection="${GEPPETTO_COLLECTION:-}" keep=0
+    local set="" inventory="" collection="${GEPPETTO_COLLECTION:-}" keep=0 images=() image
     while (($#)); do
         case "$1" in
             --set) set="${2:?--set needs a name}"; shift 2 ;;
+            --image) images+=("${2:?--image needs an image}"); shift 2 ;;
             --inventory) inventory="${2:?--inventory needs a file}"; shift 2 ;;
             --collection) collection="${2:?--collection needs a name}"; shift 2 ;;
             --keep) keep=1; shift ;;
             *) die "acceptance: unknown option '$1'." ;;
         esac
+    done
+    local sources=0
+    [[ -n "${set}" ]] && sources=$((sources + 1))
+    [[ -n "${inventory}" ]] && sources=$((sources + 1))
+    ((${#images[@]})) && sources=$((sources + 1))
+    ((sources <= 1)) || die "use only one of --set, --image and --inventory."
+    set="${set:-default}"
+    for image in "${images[@]}"; do
+        [[ "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "invalid image name '${image}'."
     done
     if [[ -z "${collection}" ]]; then
         # Follow the Puppet version PDK uses by default: 9 with PDK 4.x, 8.10 with PDK 3.x.
@@ -291,6 +304,12 @@ cmd_acceptance() {
         mkdir -p "$(dirname "${ACC_INVENTORY}")"
         cp "${inventory}" "${ACC_INVENTORY}"
         info "Using existing machines from ${inventory} (no provisioning, no tear down)"
+    elif ((${#images[@]})); then
+        ACC_PROVISIONED=1
+        for image in "${images[@]}"; do
+            info "Provisioning ${image} (docker, not from provision.yaml)"
+            run_rake "litmus:provision[docker,${image}]"
+        done
     else
         grep -qE "^${set}:" "${MODULE_ROOT}/provision.yaml" 2>/dev/null \
             || die "set '${set}' not found in provision.yaml."
