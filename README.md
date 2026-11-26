@@ -144,7 +144,21 @@ links it into each agent's global instruction file (`~/.copilot/copilot-instruct
 On first start, log in to the agent (Copilot: `/login`); the login persists in
 `~/geppetto/home`.
 
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `pm push`: `Permission to <user>/<module>.git denied to <user>` (403) | The token cannot write to this fork. Check the token on GitHub: *Repository access* must list exactly this fork (similar names are easy to mix up), *Contents* must be *Read and write*, and the *Resource owner* must be your account. Test with `git push --dry-run origin HEAD:refs/heads/agent/test`. |
+| `pm push` rejected: `refusing to allow a Personal Access Token to create or update workflow` | The token needs *Workflows: Read and write*. |
+| `git push origin HEAD:main`: `GH013: Repository rule violations` | Expected: `geppetto protect` blocks direct pushes to the default branch. |
+| `Authentication is required for rubygems-puppetcore.puppet.com` | `PUPPET_FORGE_TOKEN` missing or `~/.gemfile` not managed by Geppetto (`pm info` warns). |
+| `Could not find compatible versions … bolt … puppet >= 8.11` | Puppet Core gems with PDK 3.x; leave `GEPPETTO_GEM_SOURCE` on `auto` (public gems for PDK 3.x). |
+
+Changes to `.env` take effect after `geppetto stop <task>` and `geppetto start …`; changes to
+a token's settings on GitHub take effect immediately.
+
 ## Status
 
-First version, not yet tested on a real host. Reference module for testing:
-`puppetlabs-motd`.
+Verified end to end on an AWS host with `puppetlabs-motd` (PDK 3.5.1): build, start,
+validate, unit, acceptance (Docker), push, ruleset. Next: agent tasks with Copilot and
+PDK 4.0.1 / Puppet 9.

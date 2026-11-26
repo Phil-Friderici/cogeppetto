@@ -244,8 +244,8 @@ docs/concept.md             this document
 
 1. ~~Create the repo `geppetto` with the first version of all files.~~ Done.
 2. ~~On the host: `geppetto build --pdk 3.5.1` and `--pdk 4.0.1`.~~ Done: both build.
-3. `geppetto start puppetlabs-motd`: automatic PDK detection ✔, `pm setup` / `validate` / `unit` with PDK 3.5.1 and public gems ✔, `pm setup` with PDK 4.0.1 and Puppet Core ✔. Open: Copilot login, `validate` / `unit` with PDK 4.0.1.
+3. `geppetto start puppetlabs-motd`: automatic PDK detection ✔, upstream detection ✔, `pm setup` / `validate` / `unit` with PDK 3.5.1 and public gems ✔, `pm setup` with PDK 4.0.1 and Puppet Core ✔. Open: Copilot login, `validate` / `unit` with PDK 4.0.1.
 4. `pm acceptance` with the Docker backend: PDK 3.5.1, `puppet8`, `litmusimage/centos:7` ✔ (6 examples, 0 failures; Docker socket, host networking and tear down work). Open: PDK 4.0.1 with `puppetcore9` on a current platform.
-5. `geppetto protect` and `pm push` end to end.
-6. `pm pdk-update`: upgrade motd from PDK 3.5.1 to 4.0.1.
+5. ~~`geppetto protect` and `pm push` end to end.~~ Done: `agent/push-test` pushed to the fork with compare link; a direct push to `main` is rejected by the ruleset (GH013).
+6. First agent task with Copilot: upgrade motd to PDK 4.0.1 and Puppet 9 (`pm pdk-update`, current platforms in `provision.yaml` and `metadata.json`, acceptance with `puppetcore9`).
 7. Then: additional agents, `vagrant` backend with motd's Windows set.
