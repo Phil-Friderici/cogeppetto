@@ -351,13 +351,18 @@ cmd_push() {
         fi
     done
 
-    # Transparency: every agent commit should carry an Assisted-by trailer.
-    local missing
-    missing="$(git_m log --format='%h %s%x09%(trailers:key=Assisted-by,valueonly,separator=%x2C)' "${range}" \
-        | awk -F '\t' '$2 == "" {print "  " $1}')"
+    # Transparency: every agent commit should carry an Assisted-by line. Checked as a
+    # line anywhere in the message, not via git's trailer parser: git only recognises
+    # the last paragraph, and agents often add their own trailer block after ours.
+    local missing="" sha
+    while read -r sha; do
+        [[ -n "${sha}" ]] || continue
+        git_m log -1 --format=%B "${sha}" | grep -qiE '^Assisted-by:[[:space:]]*[^[:space:]]' \
+            || missing+="  $(git_m log -1 --format='%h %s' "${sha}")"$'\n'
+    done < <(git_m rev-list "${range}")
     if [[ -n "${missing}" ]]; then
-        warn "these commits have no 'Assisted-by:' trailer (see AGENTS.md):"
-        printf '%s\n' "${missing}" >&2
+        warn "these commits have no 'Assisted-by:' line (see AGENTS.md):"
+        printf '%s' "${missing}" >&2
     fi
 
     info "Pushing ${branch} to origin"

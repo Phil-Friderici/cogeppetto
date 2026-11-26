@@ -17,7 +17,20 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
    Assisted-by: <agent name> (Geppetto)
    ```
 
-   for example `Assisted-by: GitHub Copilot CLI (Geppetto)`. Commits are authored with
+   for example `Assisted-by: GitHub Copilot CLI (Geppetto)`. Put it in the **same final
+   block** as any other trailers (e.g. `Co-authored-by:`), with no blank line between
+   them, so git recognises all of them as trailers:
+
+   ```
+   Update module to PDK 4.0.1 and Puppet 9
+
+   Explain why here.
+
+   Assisted-by: GitHub Copilot CLI (Geppetto)
+   Co-authored-by: Copilot <...>
+   ```
+
+   Commits are authored with
    the operator's identity, who reviews and takes responsibility for them; the trailer
    keeps your involvement visible. `pm push` warns about commits without it.
 5. `pm validate` and `pm unit` – both must pass.
