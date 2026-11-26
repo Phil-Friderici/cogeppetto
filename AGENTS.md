@@ -61,12 +61,16 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 - Do not change files managed by the PDK template (e.g. `Gemfile`, `Rakefile`,
   `.rubocop.yml`, `spec/spec_helper.rb`, CI workflows) by hand. Put customisations in
   `.sync.yml` and run `pm pdk-update`, or explain why a manual change is needed.
-- Do not change the supported or tested platforms (`operatingsystem_support` in
-  `metadata.json`, the sets in `provision.yaml`) unless the task explicitly asks for it.
-  Platform support depends on which Puppet agent versions exist for a platform, which
-  has to be checked by a human first. If you think a change is needed, say so in your
-  report instead. To run acceptance tests on a platform the module's sets do not cover,
-  use `pm acceptance --image <image>`, which changes no files.
+- Do not change what the module supports: `operatingsystem_support`, `requirements`
+  (Puppet versions) and `dependencies` in `metadata.json`, and the sets in
+  `provision.yaml`, unless the task explicitly asks for it. "Puppet 9 as the target"
+  means testing against Puppet 9 and keeping it working, not dropping Puppet 8.
+  Support depends on which Puppet agent versions exist for a platform and on the
+  module's users, which has to be decided by a human. If you think support should
+  change, say so in your report instead. To run acceptance tests on a platform the
+  module's sets do not cover, use `pm acceptance --image <image>`, which changes no files.
+- Every change to `metadata.json` other than `pdk-version`, `template-url` and
+  `template-ref` must be named in the commit message and in your report.
 - Treat Litmus and the `provision` module as given tools. Do not patch, pin or work
   around them; if they fail, report the error and stop.
 - Do not "fix" failing tests by deleting or weakening them. If a test is wrong, explain
