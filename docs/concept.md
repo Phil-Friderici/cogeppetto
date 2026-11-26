@@ -113,7 +113,9 @@ pm unit         pdk test unit (also covers Windows/Solaris via facts)
 pm target up    start a test machine (Litmus) with Puppet and the module installed
 pm apply M      reinstall the module, puppet apply M on the test machine, second run as idempotence check
 pm target exec  run a command on the test machine; pm target down removes it
+pm sets         list provision.yaml sets and whether their images are usable here
 pm acceptance   Litmus: provision → install_agent → install_module → test → tear_down (also on failure)
+                --all-sets: every usable docker set, one after another, with a summary
 pm pdk-update   pdk update --noop → update → bundle → validate → unit
 pm push         push branch agent/<topic> to the fork (secret check, trailer warning)
 ```
@@ -196,6 +198,10 @@ Litmus is the successor to Beaker. It uses Bolt for connectivity (SSH or WinRM) 
 **Geppetto consumes Litmus as it is.** Litmus has accumulated technical debt and needs to be repaired separately; Geppetto does not patch or work around it, and agents report Litmus failures instead of fixing them.
 
 **Platforms are not changed by agents.** Supported and tested platforms (`operatingsystem_support` in `metadata.json`, the sets in `provision.yaml`) stay as they are unless a task explicitly asks for a change, because platform support depends on which Puppet agent versions exist and must be checked by a human first. When the module's sets cannot run (e.g. the default set is CentOS 7, which has no Puppet 9 agent), `pm acceptance --image <image>` provisions a single Docker image via `litmus:provision[docker,<image>]` without changing any file.
+
+**Several operating systems:** a set with several images is provisioned at once and tested in parallel (`litmus:acceptance:parallel`); `--image` can be given several times; `pm acceptance --all-sets` runs every docker set from `provision.yaml` one after another, each with its own machines and tear down, skips images that do not exist in the registry and ends with a summary per set. The host's CPU and memory limit how many systemd containers run in parallel.
+
+**Which images are usable:** `pm sets` checks each image of `provision.yaml` live. Docker images come from the public `litmusimage/*` repositories on Docker Hub (debian, ubuntu, centos, oraclelinux, rockylinux, almalinux, amazonlinux, redhat, fedora, sles, scientificlinux as of 2026-11-26); `pm sets` checks with `docker manifest inspect`, without downloading. `abs` and `provision_service` are Puppet-internal services and not usable; `vagrant` boxes are public but need the `vagrant` backend. An existing image does not guarantee that the chosen agent collection supports the platform; that shows only during `litmus:install_agent`.
 
 **Interchangeable backends for test machines:**
 

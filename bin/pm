@@ -28,7 +28,10 @@ Usage: pm <command> [options]
       --inventory FILE      Test existing machines from FILE instead of provisioning
       --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
                             puppetcore9 for Puppet Core gems, else puppet8)
+      --all-sets            Run every docker set from provision.yaml, one after another
+                            (images missing from the registry are skipped), with a summary
       --keep                Keep the test machines after the run (no tear down)
+  sets                      List provision.yaml sets and whether their images are usable here
   target up [options]       Start a test machine with Puppet and this module installed
       --set NAME | --image IMAGE | --collection NAME   (as for acceptance)
   apply FILE.pp | -e 'MANIFEST' [--noop]
@@ -327,6 +330,59 @@ bolt_run() {
         --targets all --inventoryfile "$(inventory_file)")
 }
 
+# --------------------------------------------------------------------------- sets
+
+# Ruby for small helpers: PDK's private Ruby (newest), else any ruby on PATH.
+pdk_ruby() {
+    local r
+    r="$(ls -d /opt/puppetlabs/pdk/private/ruby/*/bin/ruby 2>/dev/null | sort -V | tail -n 1)"
+    [[ -n "${r}" ]] || r="$(command -v ruby || true)"
+    [[ -n "${r}" ]] || die "no Ruby found to read provision.yaml."
+    printf '%s' "${r}"
+}
+
+# Print "SET<TAB>PROVISIONER<TAB>IMAGE" for every image in provision.yaml.
+list_set_images() {
+    local file="${MODULE_ROOT}/provision.yaml"
+    [[ -f "${file}" ]] || die "module has no provision.yaml."
+    "$(pdk_ruby)" -ryaml -e '
+        data = YAML.safe_load(File.read(ARGV[0])) || {}
+        data.each do |set, conf|
+          next unless conf.is_a?(Hash)
+          Array(conf["images"]).each { |img| puts [set, conf["provisioner"].to_s, img].join("\t") }
+        end' "${file}"
+}
+
+docker_provisioner() { [[ "$1" == docker || "$1" == docker_exp ]]; }
+
+# Does the image exist in its registry? Checks the manifest only, downloads nothing.
+image_available() { docker manifest inspect "$1" >/dev/null 2>&1; }
+
+cmd_sets() {
+    local set prov image status n_ok=0 n_missing=0 n_other=0
+    printf '%-24s %-18s %-44s %s\n' SET PROVISIONER IMAGE STATUS
+    while IFS=$'\t' read -r set prov image; do
+        if docker_provisioner "${prov}"; then
+            if image_available "${image}"; then
+                status="available"; n_ok=$((n_ok + 1))
+            else
+                status="NOT FOUND in registry"; n_missing=$((n_missing + 1))
+            fi
+        else
+            case "${prov}" in
+                vagrant) status="not usable yet (vagrant backend not available)" ;;
+                abs|provision_service) status="not usable here (${prov}: Puppet internal)" ;;
+                *) status="not usable here (provisioner ${prov})" ;;
+            esac
+            n_other=$((n_other + 1))
+        fi
+        printf '%-24s %-18s %-44s %s\n' "${set}" "${prov}" "${image}" "${status}"
+    done < <(list_set_images)
+    echo
+    info "${n_ok} available, ${n_missing} not found, ${n_other} not usable with Geppetto's docker backend"
+    info "Available means the image exists; whether collection $(default_collection) has an agent for it shows only at install time."
+}
+
 # --------------------------------------------------------------------------- acceptance
 
 acceptance_teardown() {
@@ -339,10 +395,61 @@ acceptance_teardown() {
     fi
 }
 
+# Run every docker set from provision.yaml, one after another, each with its own
+# machines and tear down. Images missing from the registry are skipped.
+acceptance_all_sets() {
+    local collection="$1" set prov image
+    local -a order=() results=()
+    local -A set_images=() set_skipped=()
+    inventory_has_targets && die "test machines from 'pm target up' are still running; remove them with 'pm target down' first."
+    while IFS=$'\t' read -r set prov image; do
+        docker_provisioner "${prov}" || continue
+        [[ -v "set_images[${set}]" || -v "set_skipped[${set}]" ]] || order+=("${set}")
+        if image_available "${image}"; then
+            set_images["${set}"]+="${image} "
+        else
+            set_skipped["${set}"]+="${image} "
+        fi
+    done < <(list_set_images)
+    ((${#order[@]})) || die "provision.yaml has no docker sets."
+
+    local rc args=() failed=0
+    for set in "${order[@]}"; do
+        echo
+        info "===== Set '${set}' ====="
+        [[ -n "${set_skipped[${set}]:-}" ]] && warn "skipping images not found in the registry: ${set_skipped[${set}]}"
+        if [[ -z "${set_images[${set}]:-}" ]]; then
+            results+=("${set}: SKIPPED (no available images)")
+            continue
+        fi
+        args=()
+        for image in ${set_images[${set}]}; do args+=(--image "${image}"); done
+        [[ -n "${collection}" ]] && args+=(--collection "${collection}")
+        # Subshell: each set gets its own EXIT trap (tear down) and cannot end the loop.
+        set +e
+        ( set -e; cmd_acceptance "${args[@]}" )
+        rc=$?
+        set -e
+        if ((rc == 0)); then
+            results+=("${set}: OK (${set_images[${set}]% })")
+        else
+            results+=("${set}: FAILED (${set_images[${set}]% })"); failed=1
+        fi
+    done
+
+    echo
+    info "===== Summary ====="
+    local line
+    for line in "${results[@]}"; do echo "    ${line}"; done
+    ((failed == 0)) || die "acceptance --all-sets: at least one set FAILED"
+    info "acceptance --all-sets: OK"
+}
+
 cmd_acceptance() {
-    local set="" inventory="" collection="" keep=0 images=()
+    local set="" inventory="" collection="" keep=0 images=() all_sets=0
     while (($#)); do
         case "$1" in
+            --all-sets) all_sets=1; shift ;;
             --set) set="${2:?--set needs a name}"; shift 2 ;;
             --image) images+=("${2:?--image needs an image}"); shift 2 ;;
             --inventory) inventory="${2:?--inventory needs a file}"; shift 2 ;;
@@ -351,6 +458,12 @@ cmd_acceptance() {
             *) die "acceptance: unknown option '$1'." ;;
         esac
     done
+    if ((all_sets)); then
+        [[ -z "${set}${inventory}" && ${#images[@]} -eq 0 && ${keep} -eq 0 ]] \
+            || die "--all-sets cannot be combined with --set, --image, --inventory or --keep."
+        acceptance_all_sets "${collection}"
+        return
+    fi
     local sources=0
     [[ -n "${set}" ]] && sources=$((sources + 1))
     [[ -n "${inventory}" ]] && sources=$((sources + 1))
@@ -615,6 +728,7 @@ main() {
         validate)   cmd_validate "$@" ;;
         unit)       cmd_unit "$@" ;;
         acceptance) cmd_acceptance "$@" ;;
+        sets)       cmd_sets ;;
         target)     cmd_target "$@" ;;
         apply)      cmd_apply "$@" ;;
         pdk-update) cmd_pdk_update "$@" ;;
