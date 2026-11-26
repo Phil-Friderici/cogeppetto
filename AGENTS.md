@@ -90,6 +90,17 @@ must change nothing (idempotence). Report the changes Puppet made in run 1 and t
 of the idempotence check. Write manifests for `pm apply` to a temporary place or use
 `-e`; do not commit them unless the task asks for an example.
 
+## Known harmless messages
+
+Do not try to fix these; they come from the tools, not from the module:
+
+- `warning: syslog used to be loaded from the standard library` (Ruby 4 and the
+  `logging` gem). `pm` filters it; never add `syslog` to the `Gemfile` for it.
+- `No facts were found in the FacterDB for Facter vX ... using vY instead` during
+  `pm unit`: older facts are used for old platforms.
+- `pdk (WARN): This module is compatible with an older version of PDK`: see
+  `pm pdk-update`, only when asked to.
+
 ## Reading upstream
 
 `gh` is authenticated (read access to public repositories):

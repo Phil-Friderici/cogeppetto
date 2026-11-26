@@ -59,6 +59,12 @@ find_module_root() {
 module_pdk_version() { jq -r '."pdk-version" // empty' "${MODULE_ROOT}/metadata.json"; }
 container_pdk_version() { pdk --version 2>/dev/null | tail -n 1; }
 
+# Run PDK with known harmless noise removed from stderr, so agents do not try to "fix"
+# it. Currently: the Ruby 4 warning from the `logging` gem about `syslog`.
+pdk_run() {
+    pdk "$@" 2> >(grep -vE 'logging\.rb:[0-9]+: warning: syslog used to be loaded|^You can add syslog to your Gemfile or gemspec' >&2)
+}
+
 # Which gem world to use: Puppet Core or public rubygems.org.
 #
 # PDK 3.x ships Puppet 8.10.0, the last public release; Puppet Core's gems (bolt in
@@ -165,7 +171,7 @@ ensure_bundle() {
     if [[ -n "${force}" || ! -f "${marker}" || "$(cat "${marker}")" != "${current}" \
           || "${MODULE_ROOT}/Gemfile" -nt "${marker}" ]]; then
         info "Installing bundle for PDK $(container_pdk_version) (gems: $(gem_source))"
-        (cd "${MODULE_ROOT}" && pdk bundle install)
+        (cd "${MODULE_ROOT}" && pdk_run bundle install)
         mkdir -p "$(dirname "${marker}")"
         echo "${current}" > "${marker}"
     fi
@@ -192,7 +198,7 @@ default_branch() {
     printf '%s' "${ref#refs/remotes/${remote}/}"
 }
 
-run_rake() { (cd "${MODULE_ROOT}" && pdk bundle exec rake "$@"); }
+run_rake() { (cd "${MODULE_ROOT}" && pdk_run bundle exec rake "$@"); }
 
 # --------------------------------------------------------------------------- commands
 
@@ -245,7 +251,7 @@ cmd_validate() {
     check_pdk_match
     ensure_bundle
     info "pdk validate $*"
-    (cd "${MODULE_ROOT}" && pdk validate "$@")
+    (cd "${MODULE_ROOT}" && pdk_run validate "$@")
     info "validate: OK"
 }
 
@@ -253,7 +259,7 @@ cmd_unit() {
     check_pdk_match
     ensure_bundle
     info "pdk test unit $*"
-    (cd "${MODULE_ROOT}" && pdk test unit "$@")
+    (cd "${MODULE_ROOT}" && pdk_run test unit "$@")
     info "unit: OK"
 }
 
@@ -316,7 +322,8 @@ module_name() { jq -r '.name' "${MODULE_ROOT}/metadata.json"; }
 
 # Bolt against the machines in the Litmus inventory, from the module root.
 bolt_run() {
-    (cd "${MODULE_ROOT}" && pdk bundle exec bolt "$@" \
+    # BOLT_GEM: use Bolt from the module bundle (the same Bolt Litmus uses) on purpose.
+    (cd "${MODULE_ROOT}" && BOLT_GEM=1 pdk_run bundle exec bolt "$@" \
         --targets all --inventoryfile "$(inventory_file)")
 }
 
@@ -444,7 +451,7 @@ apply_once() {
     local cmd="/opt/puppetlabs/bin/puppet apply --detailed-exitcodes --color=false ${noop:+--noop} ${remote}"
     json="$(bolt_run command run "${cmd}" --format json || true)"
     [[ -n "${json}" ]] || die "bolt returned no result; is the test machine still running? (pm target up)"
-    jq -r '.items[] | "--- \(.target)", ((.value.stdout, .value.stderr, .value._error.msg) // empty | select(. != ""))' <<<"${json}"
+    jq -r '.items[] | "--- \(.target)", ((.value.stdout, .value.stderr, (if .value.exit_code == null then .value._error.msg else null end)) // empty | select(. != ""))' <<<"${json}"
     APPLY_CODES="$(jq -r '[.items[] | (.value.exit_code // 1)] | map(tostring) | join(" ")' <<<"${json}")"
 }
 
@@ -526,10 +533,10 @@ cmd_pdk_update() {
     local target
     target="$(container_pdk_version)"
     info "Changes needed to move the module from PDK $(module_pdk_version) to ${target}:"
-    (cd "${MODULE_ROOT}" && pdk update --noop) || true
+    (cd "${MODULE_ROOT}" && pdk_run update --noop) || true
     ((noop)) && return 0
     info "pdk update"
-    (cd "${MODULE_ROOT}" && pdk update --force)
+    (cd "${MODULE_ROOT}" && pdk_run update --force)
     ensure_bundle force
     cmd_validate
     cmd_unit
