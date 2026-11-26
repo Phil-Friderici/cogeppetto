@@ -227,7 +227,7 @@ docs/concept.md             this document
 - **Upgrading it to PDK 4.0.1** is a natural test case for `pm pdk-update`.
 - **The `Gemfile` switches `puppet`, `facter` and `bolt` to puppetcore** when `PUPPET_FORGE_TOKEN` is set → tests the credential handling from section 9.
 - **`provision.yaml` uses the classic `docker` provisioner** (SSH to `litmusimage/*` containers). This confirms that host networking is needed.
-- **Many listed images are outdated** (CentOS 7/8, Debian 8–10, Ubuntu 14.04–20.04); the default set is `litmusimage/centos:7`. Whether these images still work, or which current images to use instead, has to be tested.
+- **Many listed images are outdated** (CentOS 7/8, Debian 8–10, Ubuntu 14.04–20.04); the default set is `litmusimage/centos:7`. It still works with PDK 3.5.1 and the `puppet8` collection (verified 2026-11-26); for Puppet 9 a current platform is needed.
 - **Windows is in `metadata.json`**, and `provision.yaml` contains a `vagrant` set with `gusztavvargadr/windows-server`. That makes motd the natural first test for the later `vagrant` backend and Windows.
 - The `release_checks_*` sets use the `abs` provisioner (Puppet internal) and are not usable here.
 
@@ -244,7 +244,7 @@ docs/concept.md             this document
 1. ~~Create the repo `geppetto` with the first version of all files.~~ Done.
 2. ~~On the host: `geppetto build --pdk 3.5.1` and `--pdk 4.0.1`.~~ Done: both build.
 3. `geppetto start puppetlabs-motd`: automatic PDK detection ✔, `pm setup` / `validate` / `unit` with PDK 3.5.1 and public gems ✔, `pm setup` with PDK 4.0.1 and Puppet Core ✔. Open: Copilot login, `validate` / `unit` with PDK 4.0.1.
-4. `pm acceptance` with the Docker backend and a puppetcore agent.
+4. `pm acceptance` with the Docker backend: PDK 3.5.1, `puppet8`, `litmusimage/centos:7` ✔ (6 examples, 0 failures; Docker socket, host networking and tear down work). Open: PDK 4.0.1 with `puppetcore9` on a current platform.
 5. `geppetto protect` and `pm push` end to end.
 6. `pm pdk-update`: upgrade motd from PDK 3.5.1 to 4.0.1.
 7. Then: additional agents, `vagrant` backend with motd's Windows set.
