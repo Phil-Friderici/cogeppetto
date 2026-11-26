@@ -237,15 +237,13 @@ docs/concept.md             this document
 - Are there ready-made Windows or Solaris test VMs, and can they be reset?
 - Which Solaris versions are relevant (hopefully x86 only)?
 - Which older PDK versions are needed besides 3.5.1? (3.5.1 and 4.0.1 are both available from Puppet Core for Ubuntu 24.04.)
-- Which current `litmusimage/*` images to use for motd instead of the outdated ones.
-- Does Litmus 2.8.2 / `puppet_agent` already support the `puppetcore9` collection? (First acceptance run.)
 
 ## 15. Next steps
 
 1. ~~Create the repo `geppetto` with the first version of all files.~~ Done.
 2. ~~On the host: `geppetto build --pdk 3.5.1` and `--pdk 4.0.1`.~~ Done: both build.
 3. `geppetto start puppetlabs-motd`: automatic PDK detection ✔, upstream detection ✔, `pm setup` / `validate` / `unit` with PDK 3.5.1 and public gems ✔, `pm setup` with PDK 4.0.1 and Puppet Core ✔. Open: Copilot login, `validate` / `unit` with PDK 4.0.1.
-4. `pm acceptance` with the Docker backend: PDK 3.5.1, `puppet8`, `litmusimage/centos:7` ✔ (6 examples, 0 failures; Docker socket, host networking and tear down work). Open: PDK 4.0.1 with `puppetcore9` on a current platform.
+4. ~~`pm acceptance` with the Docker backend.~~ Done: PDK 3.5.1 + `puppet8` on `litmusimage/centos:7`, and PDK 4.0.1 + `puppetcore9` (Puppet 9.1.0) on `litmusimage/ubuntu:22.04`, both 6 examples, 0 failures.
 5. ~~`geppetto protect` and `pm push` end to end.~~ Done: `agent/push-test` pushed to the fork with compare link; a direct push to `main` is rejected by the ruleset (GH013).
-6. First agent task with Copilot: upgrade motd to PDK 4.0.1 and Puppet 9 (`pm pdk-update`, current platforms in `provision.yaml` and `metadata.json`, acceptance with `puppetcore9`).
+6. ~~First agent task with Copilot: upgrade motd to PDK 4.0.1 and Puppet 9.~~ Done (branch `agent/pdk-4-ppuppet-9-gpt6-luna`): validate, unit and acceptance pass; review notes on the platform list (sources for supported platforms) feed back into `AGENTS.md`.
 7. Then: additional agents, `vagrant` backend with motd's Windows set.
