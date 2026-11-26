@@ -57,10 +57,38 @@ gem_source() {
     fi
 }
 
+# Puppet Core gem credentials for Bundler.
+#
+# PDK runs Bundler in a clean environment that drops every BUNDLE_* variable, so the
+# credentials must live in Bundler's global config (~/.bundle/config), as Puppet's
+# documentation describes. The file is kept in sync with PUPPET_FORGE_TOKEN: written
+# when the key is set, the entries removed when it is not. Other settings are kept.
+sync_bundle_credentials() {
+    local config="${HOME}/.bundle/config" tmp
+    local keys=('BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM'
+                'BUNDLE_HTTPS://RUBYGEMS___PUPPETCORE__PUPPET__COM/')
+    mkdir -p "$(dirname "${config}")"
+    tmp="$(mktemp "${config}.XXXXXX")"
+    chmod 600 "${tmp}"
+    {
+        echo '---'
+        if [[ -f "${config}" ]]; then
+            grep -v -e '^---$' -e '^"\?BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM' \
+                -e '^"\?BUNDLE_HTTPS://RUBYGEMS___PUPPETCORE__PUPPET__COM/' "${config}" || true
+        fi
+        if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
+            local key
+            for key in "${keys[@]}"; do
+                # Unquoted key: Bundler's own config parser does not strip quotes from keys.
+                printf '%s: "forge-key:%s"\n' "${key}" "${PUPPET_FORGE_TOKEN}"
+            done
+        fi
+    } > "${tmp}"
+    mv "${tmp}" "${config}"
+}
+
 prepare_env() {
-    if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
-        export BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM="forge-key:${PUPPET_FORGE_TOKEN}"
-    fi
+    sync_bundle_credentials
 }
 
 check_pdk_match() {
@@ -306,6 +334,7 @@ main() {
     (($#)) && shift
     case "${cmd}" in
         help|-h|--help) usage; return ;;
+        _sync-credentials) sync_bundle_credentials; return ;;   # used by the entrypoint
     esac
     find_module_root
     prepare_env

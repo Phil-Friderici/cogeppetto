@@ -10,6 +10,10 @@ gid="$(id -g)"
 if ! getent group "${gid}" >/dev/null; then
     echo "pinocchio:x:${gid}:" >> /etc/group
 fi
+# Supplementary groups (the Docker socket's group is added with --group-add).
+for g in $(id -G); do
+    getent group "${g}" >/dev/null || echo "docker:x:${g}:" >> /etc/group
+done
 if ! getent passwd "${uid}" >/dev/null; then
     echo "pinocchio:x:${uid}:${gid}:Pinocchio:${HOME}:/bin/bash" >> /etc/passwd
 fi
@@ -31,9 +35,7 @@ link_instructions "${HOME}/.copilot/copilot-instructions.md"
 command -v claude >/dev/null && link_instructions "${HOME}/.claude/CLAUDE.md"
 command -v codex  >/dev/null && link_instructions "${HOME}/.codex/AGENTS.md"
 
-# Puppet Core gems: Bundler credentials derived from the Forge API key.
-if [[ -n "${PUPPET_FORGE_TOKEN:-}" ]]; then
-    export BUNDLE_RUBYGEMS___PUPPETCORE__PUPPET__COM="forge-key:${PUPPET_FORGE_TOKEN}"
-fi
+# Puppet Core gems: Bundler credentials from the Forge API key (see pm).
+pm _sync-credentials
 
 exec "$@"

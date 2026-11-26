@@ -118,9 +118,11 @@ RUN git config --system credential.https://github.com.helper '' \
     && git config --system init.defaultBranch main
 
 # The container runs with the host user's UID/GID, which has no passwd entry in the
-# image. The entrypoint adds one at startup, so /etc/passwd and /etc/group must be
-# writable. This is acceptable: the container belongs to a single user.
-RUN chmod 0666 /etc/passwd /etc/group \
+# image (the image's default "ubuntu" user is removed so the name is free). The
+# entrypoint adds one at startup, so /etc/passwd and /etc/group must be writable.
+# This is acceptable: the container belongs to a single user.
+RUN (userdel --remove ubuntu 2>/dev/null || true) \
+    && chmod 0666 /etc/passwd /etc/group \
     && install -d -m 0777 /home/pinocchio /workspace
 
 COPY AGENTS.md /opt/geppetto/AGENTS.md
