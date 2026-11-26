@@ -90,6 +90,27 @@ must change nothing (idempotence). Report the changes Puppet made in run 1 and t
 of the idempotence check. Write manifests for `pm apply` to a temporary place or use
 `-e`; do not commit them unless the task asks for an example.
 
+## Acceptance results per image
+
+`pm acceptance` reports one status per image. Only one of them is about your work:
+
+| Status | Meaning | What you do |
+|---|---|---|
+| `OK` | Tests passed on this image. | Nothing. |
+| `TEST FAILED` | The module's tests failed on this image. **This is about the module, and usually about your change.** | Read the failures, fix the code (not the tests, unless a test is wrong, see Rules), and run again. If the same test also fails without your change (`git stash`, run again), say so in your report. |
+| `PROVISION FAILED` | The test machine could not be created, e.g. the image's package repositories no longer exist. **Not caused by the module.** | Report the image and the error line. Do not change `provision.yaml`, do not patch Litmus, do not retry with workarounds. |
+| `AGENT FAILED` | Puppet could not be installed on the machine, e.g. no package of this collection for this platform. **Not caused by the module.** | Report the image, the collection and the error line. Do not change the collection or the platform list to make it pass. |
+| `MISSING` | The image does not exist in the registry. | Report it. |
+
+Exit codes: `0` all tested images OK; `1` at least one `TEST FAILED`; `3` no test failure,
+but infrastructure problems (`PROVISION FAILED`, `AGENT FAILED`, `MISSING`).
+
+Your work is done when no image reports `TEST FAILED`. Infrastructure failures do not
+block your push, but they must appear in your report, so a human can decide what to do
+with those platforms. If no image could be tested at all, also run
+`pm acceptance --image <current platform>` (e.g. `litmusimage/ubuntu:22.04`) so that at
+least one real test run exists.
+
 ## Known harmless messages
 
 Do not try to fix these; they come from the tools, not from the module:
@@ -119,9 +140,10 @@ git fetch upstream pull/456/head:pr-456     # check out an upstream PR locally
 - `pm sets` lists the sets in `provision.yaml` and whether their images can be used here
   (Docker images that exist in the registry; `abs`/`provision_service` are Puppet
   internal, `vagrant` is not available yet).
-- `pm acceptance --all-sets` runs every usable Docker set one after another and prints a
-  summary; use it when a change can behave differently across platforms. Report sets or
-  images that failed or are missing from the registry, and do not remove them from `provision.yaml`.
+- `pm acceptance --all-sets` runs every Docker set one after another and prints a
+  summary per image (see *Acceptance results per image*); use it when a change can
+  behave differently across platforms. Do not remove failing or missing images from
+  `provision.yaml`.
 - `pm acceptance --set <name>` selects another set from `provision.yaml`;
   `pm acceptance --image litmusimage/ubuntu:22.04` tests a single Docker image without
   touching `provision.yaml` (e.g. when the default set's platform has no Puppet 9 agent);

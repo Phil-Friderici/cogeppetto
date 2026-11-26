@@ -101,8 +101,13 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 that exist in the registry; `abs` and `provision_service` are Puppet internal, `vagrant`
 needs a backend that does not exist yet).
 
-`pm acceptance` options: `--all-sets` (every usable Docker set, one after another, with a
-summary), `--set NAME` (set from `provision.yaml`), `--image IMAGE` (a
+`pm acceptance` reports a status per image: `OK`, `TEST FAILED` (the module),
+`PROVISION FAILED`, `AGENT FAILED`, `MISSING` (infrastructure, not caused by the module).
+Exit code 0 means all tested images passed, 1 test failures, 3 infrastructure problems only.
+Each image is provisioned and gets its agent on its own, so one broken image does not stop
+the others; the tests then run in parallel on all remaining machines.
+
+Options: `--all-sets` (every Docker set, one after another), `--set NAME` (set from `provision.yaml`), `--image IMAGE` (a
 Docker image instead of a set, without changing `provision.yaml`), `--inventory FILE`
 (test existing machines), `--collection NAME` (default `puppetcore8` with a Forge key),
 `--keep` (no tear down).

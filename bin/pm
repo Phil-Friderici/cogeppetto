@@ -29,7 +29,8 @@ Usage: pm <command> [options]
       --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
                             puppetcore9 for Puppet Core gems, else puppet8)
       --all-sets            Run every docker set from provision.yaml, one after another
-                            (images missing from the registry are skipped), with a summary
+      Result per image: OK, TEST FAILED (the module), PROVISION FAILED, AGENT FAILED,
+      MISSING (infrastructure). Exit: 0 all OK, 1 test failures, 3 infrastructure only.
       --keep                Keep the test machines after the run (no tear down)
   sets                      List provision.yaml sets and whether their images are usable here
   target up [options]       Start a test machine with Puppet and this module installed
@@ -341,7 +342,8 @@ pdk_ruby() {
     printf '%s' "${r}"
 }
 
-# Print "SET<TAB>PROVISIONER<TAB>IMAGE" for every image in provision.yaml.
+# Print "SET<TAB>PROVISIONER<TAB>IMAGE<TAB>simple|extra" for every image in provision.yaml.
+# "extra": the set has settings besides provisioner and images (e.g. vars).
 list_set_images() {
     local file="${MODULE_ROOT}/provision.yaml"
     [[ -f "${file}" ]] || die "module has no provision.yaml."
@@ -349,7 +351,8 @@ list_set_images() {
         data = YAML.safe_load(File.read(ARGV[0])) || {}
         data.each do |set, conf|
           next unless conf.is_a?(Hash)
-          Array(conf["images"]).each { |img| puts [set, conf["provisioner"].to_s, img].join("\t") }
+          simple = (conf.keys - %w[provisioner images]).empty? ? "simple" : "extra"
+          Array(conf["images"]).each { |img| puts [set, conf["provisioner"].to_s, img, simple].join("\t") }
         end' "${file}"
 }
 
@@ -361,7 +364,7 @@ image_available() { docker manifest inspect "$1" >/dev/null 2>&1; }
 cmd_sets() {
     local set prov image status n_ok=0 n_missing=0 n_other=0
     printf '%-24s %-18s %-44s %s\n' SET PROVISIONER IMAGE STATUS
-    while IFS=$'\t' read -r set prov image; do
+    while IFS=$'\t' read -r set prov image _; do
         if docker_provisioner "${prov}"; then
             if image_available "${image}"; then
                 status="available"; n_ok=$((n_ok + 1))
@@ -384,67 +387,185 @@ cmd_sets() {
 }
 
 # --------------------------------------------------------------------------- acceptance
+#
+# Each image is provisioned and gets its agent on its own, so a broken image does not
+# stop the others; the tests then run once for all remaining machines in parallel.
+# Result per image, written to ACC_RESULTS as "SET<TAB>IMAGE<TAB>STATUS<TAB>DETAIL":
+#   OK, TEST FAILED                         about the module
+#   PROVISION FAILED, AGENT FAILED, MISSING  infrastructure, not caused by the module
+# Exit codes: 0 all tested images OK; 1 at least one TEST FAILED; 3 no test failure,
+# but infrastructure problems (or nothing could be tested).
+
+ACC_RESULTS=""
+ACC_PROVISIONED=0
+ACC_KEEP=0
 
 acceptance_teardown() {
-    if ((ACC_PROVISIONED)) && ((ACC_KEEP == 0)); then
-        info "Tearing down test machines"
-        run_rake litmus:tear_down || warn "tear down failed; check 'docker ps' for leftovers."
-    elif ((ACC_PROVISIONED)); then
-        info "Keeping test machines (inventory: $(inventory_file))."
-        info "Remove them later with: pm target down"
+    # An inventory without machines (all failed and were removed) is just left over.
+    if ((ACC_PROVISIONED)) && ! inventory_has_targets; then
+        rm -f "$(inventory_file)"
+        return 0
+    fi
+    if ((ACC_PROVISIONED)) && inventory_has_targets; then
+        if ((ACC_KEEP)); then
+            info "Keeping test machines (inventory: $(inventory_file))."
+            info "Remove them later with: pm target down"
+        else
+            info "Tearing down test machines"
+            run_rake litmus:tear_down || warn "tear down failed; check 'docker ps' for leftovers."
+            rm -f "$(inventory_file)"
+        fi
     fi
 }
 
-# Run every docker set from provision.yaml, one after another, each with its own
-# machines and tear down. Images missing from the registry are skipped.
-acceptance_all_sets() {
-    local collection="$1" set prov image
-    local -a order=() results=()
-    local -A set_images=() set_skipped=()
-    inventory_has_targets && die "test machines from 'pm target up' are still running; remove them with 'pm target down' first."
-    while IFS=$'\t' read -r set prov image; do
-        docker_provisioner "${prov}" || continue
-        [[ -v "set_images[${set}]" || -v "set_skipped[${set}]" ]] || order+=("${set}")
-        if image_available "${image}"; then
-            set_images["${set}"]+="${image} "
-        else
-            set_skipped["${set}"]+="${image} "
-        fi
-    done < <(list_set_images)
-    ((${#order[@]})) || die "provision.yaml has no docker sets."
+inventory_uris() {
+    local inv
+    inv="$(inventory_file)"
+    [[ -f "${inv}" ]] || return 0
+    sed -nE 's/^[[:space:]]*-?[[:space:]]*uri:[[:space:]]*["'\'']?([^"'\'' ]+)["'\'']?.*/\1/p' "${inv}"
+}
 
-    local rc args=() failed=0
-    for set in "${order[@]}"; do
-        echo
-        info "===== Set '${set}' ====="
-        [[ -n "${set_skipped[${set}]:-}" ]] && warn "images missing from the registry: ${set_skipped[${set}]% }"
-        if [[ -z "${set_images[${set}]:-}" ]]; then
-            results+=("${set}: MISSING (no image in the registry: ${set_skipped[${set}]% })")
+# The most telling line of a Litmus/Bolt error log (messages are often one long string
+# with literal \n separators).
+error_hint() {
+    local log="$1" hint
+    hint="$(grep -oE 'CRIT: [^\\"]+|Could not resolve host: [^]\\" ]+|Failed to connect to bus[^\\"]*|[0-9]{3} +Not Found|E: [^\\"]+|No package [^\\"]+|Unable to [^\\"]+' "${log}" | head -n 1)"
+    [[ -n "${hint}" ]] || hint="$(grep -A1 -m1 'rake aborted!' "${log}" | tail -n 1)"
+    [[ -n "${hint}" ]] || hint="see output above"
+    printf '%s' "${hint}" | tr -s ' ' | cut -c1-80
+}
+
+acc_result() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "${ACC_RESULTS}"; }
+
+# Run acceptance for one group of images. Args: LABEL PROVISIONER COLLECTION IMAGE...
+acceptance_images() {
+    local label="$1" prov="$2" collection="$3" image uri log before after rc
+    shift 3
+    local -A uri_image=()
+    local -a uris=()         # keeps the order of the images
+    log="$(mktemp)"
+
+    for image in "$@"; do
+        if docker_provisioner "${prov}" && ! image_available "${image}"; then
+            acc_result "${label}" "${image}" "MISSING" "not found in the registry"
+            warn "${image}: MISSING (not found in the registry)"
             continue
         fi
-        args=()
-        for image in ${set_images[${set}]}; do args+=(--image "${image}"); done
-        [[ -n "${collection}" ]] && args+=(--collection "${collection}")
-        # Subshell: each set gets its own EXIT trap (tear down) and cannot end the loop.
-        set +e
-        ( set -e; cmd_acceptance "${args[@]}" )
-        rc=$?
-        set -e
-        local missing_note=""
-        [[ -n "${set_skipped[${set}]:-}" ]] && missing_note="; missing: ${set_skipped[${set}]% }"
-        if ((rc == 0)); then
-            results+=("${set}: OK (${set_images[${set}]% }${missing_note})")
-        else
-            results+=("${set}: FAILED (${set_images[${set}]% }${missing_note})"); failed=1
+        info "Provisioning ${image} (${prov})"
+        before="$(inventory_uris | sort)"
+        ACC_PROVISIONED=1
+        if ! run_rake "litmus:provision[${prov},${image}]" 2>&1 | tee "${log}"; then
+            acc_result "${label}" "${image}" "PROVISION FAILED" "$(error_hint "${log}")"
+            warn "${image}: PROVISION FAILED"
+            continue
         fi
+        after="$(inventory_uris | sort)"
+        uri="$(comm -13 <(printf '%s\n' "${before}") <(printf '%s\n' "${after}") | head -n 1)"
+        if [[ -z "${uri}" ]]; then
+            acc_result "${label}" "${image}" "PROVISION FAILED" "no new machine in the Litmus inventory"
+            continue
+        fi
+        info "Installing agent on ${uri} (collection ${collection})"
+        if ! run_rake "litmus:install_agent[${collection},${uri}]" 2>&1 | tee "${log}"; then
+            acc_result "${label}" "${image}" "AGENT FAILED" "${collection}: $(error_hint "${log}")"
+            warn "${image}: AGENT FAILED"
+            run_rake "litmus:tear_down[${uri}]" >/dev/null 2>&1 || true
+            continue
+        fi
+        uri_image["${uri}"]="${image}"
+        uris+=("${uri}")
     done
 
+    if ((${#uri_image[@]} == 0)); then
+        rm -f "${log}"
+        return 0
+    fi
+
+    info "Installing module"
+    if ! run_rake litmus:install_module 2>&1 | tee "${log}"; then
+        for uri in "${uris[@]}"; do
+            acc_result "${label}" "${uri_image[${uri}]}" "TEST FAILED" "module could not be installed: $(error_hint "${log}")"
+        done
+        rm -f "${log}"
+        return 0
+    fi
+
+    info "Running acceptance tests on ${#uri_image[@]} machine(s)"
+    rc=0
+    run_rake litmus:acceptance:parallel 2>&1 | tee "${log}" || rc=$?
+
+    # Per machine: "Successful on N nodes: [...]" / "Failed on N nodes: [...]" from Litmus,
+    # and the "X examples, Y failures" line of each machine's block.
+    local ok_line failed_line summary
+    ok_line="$(grep -E '^Successful on [0-9]+ nodes?:' "${log}" | tail -n 1 || true)"
+    failed_line="$(grep -E '^Failed on [0-9]+ nodes?:' "${log}" | tail -n 1 || true)"
+    for uri in "${uris[@]}"; do
+        image="${uri_image[${uri}]}"
+        summary="$(awk -v u="${uri}, " 'index($0, u) == 1 {f=1; next} /^================/ {f=0} f && / examples?, [0-9]+ failures?/ {print; exit}' "${log}")"
+        if [[ "${failed_line}" == *"\"${uri}, "* ]]; then
+            acc_result "${label}" "${image}" "TEST FAILED" "${summary:-see output above}"
+        elif [[ "${ok_line}" == *"\"${uri}, "* ]]; then
+            acc_result "${label}" "${image}" "OK" "${summary}"
+        elif ((rc == 0)); then
+            acc_result "${label}" "${image}" "OK" "${summary}"
+        else
+            acc_result "${label}" "${image}" "TEST FAILED" "no per-machine result from Litmus; see output above"
+        fi
+    done
+    rm -f "${log}"
+}
+
+# Print the summary of ACC_RESULTS and return 0 / 1 / 3 (see above).
+acceptance_summary() {
+    local set image status detail last_set="" n_ok=0 n_test=0 n_infra=0
+    local -A seen=()
     echo
     info "===== Summary ====="
-    local line
-    for line in "${results[@]}"; do echo "    ${line}"; done
-    ((failed == 0)) || die "acceptance --all-sets: at least one set FAILED"
-    info "acceptance --all-sets: OK"
+    while IFS=$'\t' read -r set image status detail; do
+        if [[ "${set}" != "${last_set}" ]]; then
+            echo "    ${set}:"
+            last_set="${set}"
+        fi
+        printf '        %-40s %-17s %s\n' "${image}" "${status}" "${detail}"
+        seen["${status}"]=1
+        case "${status}" in
+            OK) n_ok=$((n_ok + 1)) ;;
+            "TEST FAILED") n_test=$((n_test + 1)) ;;
+            *) n_infra=$((n_infra + 1)) ;;
+        esac
+    done < "${ACC_RESULTS}"
+    echo
+    [[ -v "seen[TEST FAILED]" ]] && info "TEST FAILED: the module's tests failed; fix the module (see output above)."
+    [[ -v "seen[PROVISION FAILED]" ]] && info "PROVISION FAILED: the test machine could not be created; not caused by the module. Report it, do not work around it."
+    [[ -v "seen[AGENT FAILED]" ]] && info "AGENT FAILED: Puppet could not be installed on the machine; not caused by the module. Report it, do not work around it."
+    [[ -v "seen[MISSING]" ]] && info "MISSING: the image does not exist in the registry. Report it."
+    if ((n_test > 0)); then
+        warn "acceptance: ${n_test} image(s) with TEST FAILED"
+        return 1
+    elif ((n_ok == 0)); then
+        warn "acceptance: nothing could be tested (${n_infra} infrastructure problem(s)); also test a current platform with --image"
+        return 3
+    elif ((n_infra > 0)); then
+        warn "acceptance: tests OK on ${n_ok} image(s), ${n_infra} image(s) not tested (infrastructure); report them"
+        return 3
+    fi
+    info "acceptance: OK (${n_ok} image(s))"
+    return 0
+}
+
+# One acceptance run in its own subshell: own EXIT trap (tear down), cannot end the caller.
+acceptance_group() {
+    local rc
+    set +e
+    (
+        set -e
+        ACC_PROVISIONED=0
+        trap acceptance_teardown EXIT
+        acceptance_images "$@"
+    )
+    rc=$?
+    set -e
+    return "${rc}"
 }
 
 cmd_acceptance() {
@@ -460,47 +581,98 @@ cmd_acceptance() {
             *) die "acceptance: unknown option '$1'." ;;
         esac
     done
-    if ((all_sets)); then
-        [[ -z "${set}${inventory}" && ${#images[@]} -eq 0 && ${keep} -eq 0 ]] \
-            || die "--all-sets cannot be combined with --set, --image, --inventory or --keep."
-        acceptance_all_sets "${collection}"
-        return
-    fi
     local sources=0
     [[ -n "${set}" ]] && sources=$((sources + 1))
     [[ -n "${inventory}" ]] && sources=$((sources + 1))
     ((${#images[@]})) && sources=$((sources + 1))
-    ((sources <= 1)) || die "use only one of --set, --image and --inventory."
-    set="${set:-default}"
+    ((all_sets)) && sources=$((sources + 1))
+    ((sources <= 1)) || die "use only one of --all-sets, --set, --image and --inventory."
+    ((all_sets == 0 || keep == 0)) || die "--all-sets cannot be combined with --keep."
     collection="${collection:-$(default_collection)}"
     check_collection "${collection}"
     [[ -d "${MODULE_ROOT}/spec/acceptance" ]] || die "module has no spec/acceptance directory."
     if [[ -z "${inventory}" ]] && inventory_has_targets; then
         die "test machines from 'pm target up' are still running; remove them with 'pm target down' first."
     fi
+    local image
+    for image in "${images[@]}"; do
+        [[ "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "invalid image name '${image}'."
+    done
 
     check_pdk_match
     ensure_bundle
 
-    # Globals: the EXIT trap runs after this function's locals are gone.
-    ACC_PROVISIONED=0
-    ACC_KEEP="${keep}"
-    trap acceptance_teardown EXIT
-
+    # Existing machines: no provisioning, no per-image handling, no tear down.
     if [[ -n "${inventory}" ]]; then
         [[ -f "${inventory}" ]] || die "inventory file ${inventory} not found."
         mkdir -p "$(dirname "$(inventory_file)")"
         cp "${inventory}" "$(inventory_file)"
         info "Using existing machines from ${inventory} (no provisioning, no tear down)"
-    else
-        ACC_PROVISIONED=1
-        provision_machines images "${set}"
+        install_agent_and_module "${collection}" || die "acceptance: agent or module installation failed."
+        run_rake litmus:acceptance:parallel || die "acceptance: tests FAILED"
+        info "acceptance: OK"
+        return 0
     fi
 
-    install_agent_and_module "${collection}"
-    info "Running acceptance tests"
-    run_rake litmus:acceptance:parallel
-    info "acceptance: OK"
+    ACC_RESULTS="$(mktemp)"
+    ACC_KEEP="${keep}"
+    if ((${#images[@]})); then
+        acceptance_group "images" docker "${collection}" "${images[@]}"
+    else
+        # Sets from provision.yaml: all docker sets (--all-sets) or one set.
+        local s prov simple wanted="${set:-default}"
+        local -a order=()
+        local -A set_prov=() set_simple=() set_imgs=()
+        while IFS=$'\t' read -r s prov image simple; do
+            if ((all_sets)); then
+                docker_provisioner "${prov}" || continue
+            else
+                [[ "${s}" == "${wanted}" ]] || continue
+            fi
+            [[ -v "set_prov[${s}]" ]] || order+=("${s}")
+            set_prov["${s}"]="${prov}"
+            set_simple["${s}"]="${simple}"
+            set_imgs["${s}"]+="${image} "
+        done < <(list_set_images)
+        ((${#order[@]})) || die "no matching set in provision.yaml${set:+ (set '${set}')}."
+        for s in "${order[@]}"; do
+            echo
+            info "===== Set '${s}' ====="
+            if [[ "${set_simple[${s}]}" == simple ]]; then
+                # shellcheck disable=SC2086
+                acceptance_group "${s}" "${set_prov[${s}]}" "${collection}" ${set_imgs[${s}]}
+            else
+                # The set has extra settings: let Litmus provision it as a whole.
+                acceptance_set_whole "${s}" "${collection}"
+            fi
+        done
+    fi
+    local rc=0
+    acceptance_summary || rc=$?
+    rm -f "${ACC_RESULTS}"
+    return "${rc}"
+}
+
+# Fallback for sets with extra settings (e.g. vars): one result for the whole set.
+acceptance_set_whole() {
+    local s="$1" collection="$2" rc
+    set +e
+    (
+        set -e
+        ACC_PROVISIONED=1
+        trap acceptance_teardown EXIT
+        info "Provisioning set '${s}' as a whole (it has settings besides provisioner and images)"
+        run_rake "litmus:provision_list[${s}]" || { acc_result "${s}" "(whole set)" "PROVISION FAILED" "see output above"; exit 0; }
+        install_agent_and_module "${collection}" || { acc_result "${s}" "(whole set)" "AGENT FAILED" "see output above"; exit 0; }
+        if run_rake litmus:acceptance:parallel; then
+            acc_result "${s}" "(whole set)" "OK" ""
+        else
+            acc_result "${s}" "(whole set)" "TEST FAILED" "see output above"
+        fi
+    )
+    rc=$?
+    set -e
+    return "${rc}"
 }
 
 # --------------------------------------------------------------------------- target / apply
