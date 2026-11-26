@@ -9,7 +9,7 @@ As of 2026-11-26
 ## 1. Name and metaphor
 
 - **CoGeppetto** is the project. "Co" as in copilot and co-author: agents do the work alongside humans, and humans decide what ships. The prefix sets the project apart from the Puppet IDE Geppetto (Cloudsmith/Puppet Labs, 2013–2016) and names the AI part without suggesting autonomy.
-- **Geppetto** is the workshop inside it: host, image and tooling, a tribute to that IDE. Its command stays `geppetto` (like ripgrep and `rg`): short to type, it reads naturally ("Geppetto starts a Pinocchio"), and the `GEPPETTO_*` variables and `geppetto:pdk-*` images keep their names. The data directory is `~/cogeppetto` so that the folder on the host matches the project; hosts set up as `~/geppetto` keep working until the folder is moved, and `geppetto` prints how to move it.
+- **Geppetto** is the workshop inside it: host, image and tooling, a tribute to that IDE. Its command stays `geppetto` (like ripgrep and `rg`): short to type, it reads naturally ("Geppetto starts a Pinocchio"), and the `GEPPETTO_*` variables and `geppetto:pdk-*` images keep their names. The data directory is `~/cogeppetto`, matching the project name.
 - **Pinocchios** are the agent containers (`pinocchio-<task>`). They work on their own but stay attached to Geppetto's strings: tokens, rulesets and human review.
 - When a Pinocchio fibs, its nose grows. That is exactly what validate, unit and acceptance are for.
 

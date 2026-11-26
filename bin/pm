@@ -119,8 +119,7 @@ gem_source() {
 # module Gemfile, which (like every PDK-templated Gemfile) evaluates ~/.gemfile.
 # ~/.gemfile therefore sets the credentials in Bundler's in-memory settings from
 # PUPPET_FORGE_TOKEN. The file itself contains no secret.
-# Marker text kept from before the rename to CoGeppetto, so existing files stay recognised.
-GEMFILE_MARKER='# Managed by Geppetto (pm): Puppet Core credentials'
+GEMFILE_MARKER='# Managed by CoGeppetto (pm): Puppet Core credentials'
 
 sync_bundle_credentials() {
     local gemfile="${HOME}/.gemfile"
@@ -136,15 +135,6 @@ if !geppetto_forge_token.empty? && defined?(Bundler) && Bundler.respond_to?(:set
   Bundler.settings.temporary('rubygems-puppetcore.puppet.com' => "forge-key:#{geppetto_forge_token}")
 end
 RUBY
-    fi
-    # Remove credentials an earlier Geppetto version wrote to ~/.bundle/config.
-    local config="${HOME}/.bundle/config"
-    if [[ -f "${config}" ]] && grep -q 'PUPPETCORE__PUPPET__COM' "${config}"; then
-        local tmp
-        tmp="$(mktemp "${config}.XXXXXX")"
-        grep -v 'PUPPETCORE__PUPPET__COM' "${config}" > "${tmp}" || true
-        chmod 600 "${tmp}"
-        mv "${tmp}" "${config}"
     fi
 }
 

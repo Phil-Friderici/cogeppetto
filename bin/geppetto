@@ -6,17 +6,7 @@
 set -euo pipefail
 
 GEPPETTO_SRC="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
-# Data directory: ~/cogeppetto. Hosts set up before the rename keep working with
-# ~/geppetto until it is moved (geppetto then prints how).
-LEGACY_HOME=""
-if [[ -z "${GEPPETTO_HOME:-}" ]]; then
-    if [[ ! -d "${HOME}/cogeppetto" && -d "${HOME}/geppetto/workspace" ]]; then
-        GEPPETTO_HOME="${HOME}/geppetto"
-        LEGACY_HOME=1
-    else
-        GEPPETTO_HOME="${HOME}/cogeppetto"
-    fi
-fi
+GEPPETTO_HOME="${GEPPETTO_HOME:-${HOME}/cogeppetto}"
 ENV_FILE="${GEPPETTO_HOME}/.env"
 WORKSPACE="${GEPPETTO_HOME}/workspace"
 AGENT_HOME="${GEPPETTO_HOME}/home"
@@ -490,15 +480,8 @@ cmd_cleanup() {
 
 # --------------------------------------------------------------------------- main
 
-legacy_home_hint() {
-    [[ -n "${LEGACY_HOME}" ]] || return 0
-    warn "your data is still in ~/geppetto; CoGeppetto now uses ~/cogeppetto. To move it:"
-    warn "  geppetto list; geppetto stop <task> (each); mv ~/geppetto ~/cogeppetto"
-}
-
 main() {
     local cmd="${1:-help}"
-    legacy_home_hint
     (($#)) && shift
     case "${cmd}" in
         init)    cmd_init "$@" ;;
