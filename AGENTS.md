@@ -40,6 +40,10 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 5. Test in this order; each step must pass before the next:
    1. `pm validate`
    2. `pm unit`
+
+      With PDK 4.x both run against Puppet 9. If `requirements` in `metadata.json`
+      still allows Puppet 8, also run `pm validate --puppet-version 8` and
+      `pm unit --puppet-version 8`, and report both results.
    3. `pm apply` – check on a real machine that the change does what it should
       (see *Manual runs* below). Skip it only if the change has no effect on managed
       systems (e.g. documentation), and say so. If `pm target up` fails with an
@@ -164,6 +168,4 @@ git fetch upstream pull/456/head:pr-456     # check out an upstream PR locally
 - Call `pdk` only through `pm`: `pm` picks the right gem source (Puppet Core or public)
   for this PDK version. PDK arguments pass through, e.g. `pm unit --puppet-version 8`.
 - With PDK 4.x, tests run against **Puppet 9** by default; that is the target for all
-  modules. If `metadata.json` still lists Puppet 8 as supported (`requirements`), also
-  run `pm validate --puppet-version 8` and `pm unit --puppet-version 8`, and report both
-  results.
+  modules (see step 5 of the workflow for Puppet 8).
