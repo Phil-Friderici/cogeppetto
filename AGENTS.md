@@ -8,16 +8,20 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 
 1. `pm info` – check module, PDK versions and branch.
 2. `pm setup` – once per checkout: fetches upstream and installs the bundle.
-3. `pm branch <topic>` – start work on `agent/<topic>`, branched from the upstream
-   default branch. Use a short, descriptive topic, e.g. `issue-123` or `fix-windows-path`.
+3. `pm branch <topic> --model <model>` – start work on `cogeppetto/<topic>-<model>`,
+   branched from the upstream default branch. Use a short, descriptive topic, e.g.
+   `issue-123` or `fix-windows-path`, and the name of the model you are running as,
+   e.g. `pm branch issue-123 --model gpt6-luna` → `cogeppetto/issue-123-gpt6-luna`.
 4. Make the change. Keep commits focused, with clear messages that explain *why*.
    End every commit message with a trailer that names you as the assisting agent:
 
    ```
-   Assisted-by: <agent name> (CoGeppetto)
+   Assisted-by: <agent name>, <model> (CoGeppetto)
    ```
 
-   for example `Assisted-by: GitHub Copilot CLI (CoGeppetto)`. Put it in the **same final
+   for example `Assisted-by: GitHub Copilot CLI, gpt6-luna (CoGeppetto)`. Use the same
+   model name as in the branch; if the model changes during the work, name the one that
+   wrote the commit. Put it in the **same final
    block** as any other trailers (e.g. `Co-authored-by:`), with no blank line between
    them, so git recognises all of them as trailers:
 
@@ -26,7 +30,7 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 
    Explain why here.
 
-   Assisted-by: GitHub Copilot CLI (CoGeppetto)
+   Assisted-by: GitHub Copilot CLI, gpt6-luna (CoGeppetto)
    Co-authored-by: Copilot <...>
    ```
 
@@ -47,7 +51,7 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
 
 ## Rules
 
-- Never commit to or push the default branch. Only `agent/*` branches are pushed.
+- Never commit to or push the default branch. Only `cogeppetto/*` branches are pushed.
 - Use `pm` for validation, tests and pushing. It sets up credentials and checks for you.
   If `pm` cannot do something you need, say so instead of working around it.
 - Never print, log, echo or commit tokens, keys or the environment (`env`, `printenv`,

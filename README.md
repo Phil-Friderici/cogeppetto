@@ -16,7 +16,7 @@ geppetto start puppetlabs-motd
      starts pinocchio-puppetlabs-motd and attaches GitHub Copilot CLI
 
 inside: pm branch issue-42 → edit → pm validate → pm unit → pm acceptance → pm push
-you:    review the agent/issue-42 branch on GitHub and open the PR upstream
+you:    review the cogeppetto/issue-42-<model> branch on GitHub and open the PR upstream
 ```
 
 See [docs/concept.md](docs/concept.md) for the design and its reasoning.
@@ -92,7 +92,7 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 |---|---|
 | `pm info` | Module, PDK versions (module vs. container), gem source, branch, remotes |
 | `pm setup` | Fetch upstream, disable pushes to upstream, install the bundle |
-| `pm branch TOPIC` | Create `agent/TOPIC` from the upstream default branch |
+| `pm branch TOPIC --model M` | Create `cogeppetto/TOPIC-M` from the upstream default branch; the agent names its own model |
 | `pm validate` | `pdk validate` |
 | `pm unit` | `pdk test unit` |
 | `pm target up` | Start a test machine (Litmus) with Puppet and the module installed |
@@ -100,7 +100,7 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 | `pm target exec '…'` / `pm target down` | Inspect the test machine / remove it |
 | `pm acceptance` | Litmus: provision → install agent → install module → tests → tear down |
 | `pm pdk-update [--noop]` | Move the module to the container's PDK, then validate and unit |
-| `pm push` | Push the `agent/*` branch to your fork (with a secret check) |
+| `pm push` | Push the `cogeppetto/*` branch to your fork (with a secret check) |
 
 `pm sets` shows which sets and images from `provision.yaml` are usable here (Docker images
 that exist in the registry; `abs` and `provision_service` are Puppet internal, `vagrant`
@@ -132,7 +132,7 @@ Images contain only programs. Rebuilding or removing containers never touches yo
 Agents commit with **your** git identity (`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` in
 `.env`), because you review the work and open the pull request; GitHub, CLA and DCO
 checks then attribute the commits to you. Every agent commit ends with a trailer such as
-`Assisted-by: GitHub Copilot CLI (CoGeppetto)`, so reviewers can see that an agent was
+`Assisted-by: GitHub Copilot CLI, gpt6-luna (CoGeppetto)`, so reviewers can see that an agent was
 involved. If your GitHub settings block pushes that expose your email address, use your
 `users.noreply.github.com` address instead.
 
@@ -174,7 +174,7 @@ permission. Other agents: log in on first start; the login persists in `~/cogepp
 
 | Symptom | Cause and fix |
 |---|---|
-| `pm push`: `Permission to <user>/<module>.git denied to <user>` (403) | The token cannot write to this fork. Check the token on GitHub: *Repository access* must list exactly this fork (similar names are easy to mix up), *Contents* must be *Read and write*, and the *Resource owner* must be your account. Test with `git push --dry-run origin HEAD:refs/heads/agent/test`. |
+| `pm push`: `Permission to <user>/<module>.git denied to <user>` (403) | The token cannot write to this fork. Check the token on GitHub: *Repository access* must list exactly this fork (similar names are easy to mix up), *Contents* must be *Read and write*, and the *Resource owner* must be your account. Test with `git push --dry-run origin HEAD:refs/heads/cogeppetto/test`. |
 | `pm push` rejected: `refusing to allow a Personal Access Token to create or update workflow` | The token needs *Workflows: Read and write*. |
 | `git push origin HEAD:main`: `GH013: Repository rule violations` | Expected: `geppetto protect` blocks direct pushes to the default branch. |
 | `Authentication is required for rubygems-puppetcore.puppet.com` | `PUPPET_FORGE_TOKEN` missing or `~/.gemfile` not managed by CoGeppetto (`pm info` warns). |

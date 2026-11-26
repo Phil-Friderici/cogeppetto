@@ -20,7 +20,8 @@ validate -> unit -> apply -> acceptance; then push.
 
   info                      Show module, PDK versions, gem source, branch and remotes
   setup                     Check remotes, fetch upstream, install the bundle
-  branch TOPIC              Create branch agent/TOPIC from the upstream default branch
+  branch TOPIC --model M    Create cogeppetto/TOPIC-M from the upstream default branch
+                            (M: the model the agent runs as, e.g. gpt6-luna)
   validate [PDK_ARGS...]    pdk validate
   unit [PDK_ARGS...]        pdk test unit
   acceptance [options]      Litmus acceptance tests
@@ -44,7 +45,7 @@ validate -> unit -> apply -> acceptance; then push.
   target exec 'COMMAND'     Run a command on the test machine, e.g. 'cat /etc/motd'
   target down               Remove the test machine
   pdk-update [--noop]       Update the module to this container's PDK, then validate + unit
-  push                      Push the current agent/* branch to your fork
+  push                      Push the current cogeppetto/* branch to your fork
 
 Exit code 0 means success; anything else means the step failed.
 EOF
@@ -231,18 +232,37 @@ cmd_setup() {
     info "Setup complete."
 }
 
+# Model name as a branch name part: lower case, runs of other characters become '-'.
+branch_slug() {
+    local s="${1,,}"
+    s="$(sed -E 's/[^a-z0-9.]+/-/g; s/^-+//; s/-+$//' <<<"${s}")"
+    printf '%s' "${s}"
+}
+
 cmd_branch() {
-    local topic="${1:-}"
-    [[ -n "${topic}" ]] || die "branch: which topic? e.g. pm branch issue-123"
-    topic="${topic#agent/}"
+    local topic="" model=""
+    while (($#)); do
+        case "$1" in
+            --model) model="${2:?--model needs a value}"; shift 2 ;;
+            --model=*) model="${1#--model=}"; shift ;;
+            -*) die "branch: unknown option $1" ;;
+            *) [[ -z "${topic}" ]] || die "branch: only one topic"; topic="$1"; shift ;;
+        esac
+    done
+    [[ -n "${topic}" ]] || die "branch: which topic? e.g. pm branch issue-123 --model gpt6-luna"
+    [[ -n "${model}" ]] || die "branch: --model is required (the model you are running as, e.g. gpt6-luna)"
+    topic="${topic#cogeppetto/}"
     [[ "${topic}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "invalid topic '${topic}'."
+    model="$(branch_slug "${model}")"
+    [[ -n "${model}" ]] || die "branch: --model gives an empty name"
+    [[ "${topic}" == "${model}" || "${topic}" == *-"${model}" ]] || topic="${topic}-${model}"
     local base_remote=upstream
     git_m remote get-url upstream >/dev/null 2>&1 || base_remote=origin
     git_m fetch --quiet "${base_remote}"
     local base
     base="${base_remote}/$(default_branch "${base_remote}")"
-    git_m switch --no-track -c "agent/${topic}" "${base}"
-    info "Created agent/${topic} from ${base}."
+    git_m switch --no-track -c "cogeppetto/${topic}" "${base}"
+    info "Created cogeppetto/${topic} from ${base}."
 }
 
 cmd_validate() {
@@ -852,8 +872,8 @@ cmd_pdk_update() {
 cmd_push() {
     local branch
     branch="$(git_m symbolic-ref --quiet --short HEAD)" || die "not on a branch."
-    [[ "${branch}" == agent/* ]] \
-        || die "only agent/* branches are pushed (current: ${branch}). Use 'pm branch TOPIC'."
+    [[ "${branch}" == cogeppetto/* ]] \
+        || die "only cogeppetto/* branches are pushed (current: ${branch}). Use 'pm branch TOPIC --model MODEL'."
     local origin_default
     origin_default="$(default_branch origin)"
     [[ "${branch}" != "${origin_default}" ]] || die "refusing to push the default branch."
