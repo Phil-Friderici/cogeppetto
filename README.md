@@ -90,6 +90,9 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 | `pm branch TOPIC` | Create `agent/TOPIC` from the upstream default branch |
 | `pm validate` | `pdk validate` |
 | `pm unit` | `pdk test unit` |
+| `pm target up` | Start a test machine (Litmus) with Puppet and the module installed |
+| `pm apply FILE.pp` / `-e '…'` | Reinstall the module, `puppet apply` on the test machine, then a second run as idempotence check (`--noop` to preview) |
+| `pm target exec '…'` / `pm target down` | Inspect the test machine / remove it |
 | `pm acceptance` | Litmus: provision → install agent → install module → tests → tear down |
 | `pm pdk-update [--noop]` | Move the module to the container's PDK, then validate and unit |
 | `pm push` | Push the `agent/*` branch to your fork (with a secret check) |

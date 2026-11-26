@@ -33,11 +33,16 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
    Commits are authored with
    the operator's identity, who reviews and takes responsibility for them; the trailer
    keeps your involvement visible. `pm push` warns about commits without it.
-5. `pm validate` and `pm unit` – both must pass.
-6. `pm acceptance` – run it when the change affects behaviour on real systems and the
-   module has acceptance tests. It provisions Docker containers, installs Puppet, runs
-   the tests and tears everything down.
-7. `pm push` – publishes the branch to the fork. A human reviews it and opens the pull
+5. Test in this order; each step must pass before the next:
+   1. `pm validate`
+   2. `pm unit`
+   3. `pm apply` – check on a real machine that the change does what it should
+      (see *Manual runs* below). Skip it only if the change has no effect on managed
+      systems (e.g. documentation), and say so.
+   4. `pm acceptance` – when the module has acceptance tests. It provisions Docker
+      containers, installs Puppet, runs the tests and tears everything down.
+      Run `pm target down` first if a test machine from step 3 is still running.
+6. `pm push` – publishes the branch to the fork. A human reviews it and opens the pull
    request upstream. Do not try to open pull requests yourself.
 
 ## Rules
@@ -64,6 +69,26 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
   why in the commit message.
 - Report honestly: say which steps you ran, which passed and which failed. If you skipped
   acceptance tests, say so and why.
+
+## Manual runs: `pm target` and `pm apply`
+
+Use these to see what Puppet really does on a system: to reproduce an issue, to check a
+change before and after, or to inspect the result.
+
+```
+pm target up                          # test machine from provision.yaml's default set
+pm target up --image litmusimage/ubuntu:22.04
+pm apply examples/init.pp             # or: pm apply -e "class { 'motd': content => 'Hi' }"
+pm apply --noop -e '...'              # show what would change, change nothing
+pm target exec 'cat /etc/motd'        # inspect the result
+pm target down                        # always remove the machine when you are done
+```
+
+`pm apply` reinstalls the module from your working tree first, so it always tests your
+current code. It then runs `puppet apply` twice: the first run must succeed, the second
+must change nothing (idempotence). Report the changes Puppet made in run 1 and the result
+of the idempotence check. Write manifests for `pm apply` to a temporary place or use
+`-e`; do not commit them unless the task asks for an example.
 
 ## Reading upstream
 

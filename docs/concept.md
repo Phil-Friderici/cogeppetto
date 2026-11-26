@@ -110,10 +110,17 @@ pm setup        fetch upstream, disable pushes to upstream, install bundle
 pm branch T     create agent/T from the upstream default branch
 pm validate     pdk validate
 pm unit         pdk test unit (also covers Windows/Solaris via facts)
+pm target up    start a test machine (Litmus) with Puppet and the module installed
+pm apply M      reinstall the module, puppet apply M on the test machine, second run as idempotence check
+pm target exec  run a command on the test machine; pm target down removes it
 pm acceptance   Litmus: provision → install_agent → install_module → test → tear_down (also on failure)
 pm pdk-update   pdk update --noop → update → bundle → validate → unit
 pm push         push branch agent/<topic> to the fork (secret check, trailer warning)
 ```
+
+**Test order** for agents: `validate` → `unit` → `apply` → `acceptance`; each step must pass before the next.
+
+**Manual runs:** `pm apply` runs `puppet apply` on a disposable test machine provisioned by Litmus, never in the Pinocchio itself (no root there, wrong OS, and it would change the agent's environment). It reinstalls the module from the working tree first, uploads the manifest with Bolt (already in the bundle; the Litmus inventory is a Bolt inventory) and runs `puppet apply --detailed-exitcodes` twice: run 1 must succeed (exit 0 or 2), run 2 must report no changes (exit 0), otherwise the module is not idempotent. `--noop` previews changes. The machine stays up between runs until `pm target down`; `pm acceptance` refuses to run while it is up, because both use the same Litmus inventory.
 
 `geppetto start` clones the fork on the host and adds the `upstream` remote (the fork's parent). `pm` detects the module by walking up from the current directory to the nearest `metadata.json`. It warns when the module's and the container's PDK versions differ, and runs `pdk bundle install` after a switch. Output is clear and exit codes are unambiguous so any agent can interpret them.
 

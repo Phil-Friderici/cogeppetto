@@ -29,6 +29,13 @@ Usage: pm <command> [options]
       --collection NAME     Agent collection (default: GEPPETTO_COLLECTION,
                             puppetcore9 for Puppet Core gems, else puppet8)
       --keep                Keep the test machines after the run (no tear down)
+  target up [options]       Start a test machine with Puppet and this module installed
+      --set NAME | --image IMAGE | --collection NAME   (as for acceptance)
+  apply FILE.pp | -e 'MANIFEST' [--noop]
+                            Reinstall the module, run puppet apply on the test machine,
+                            then a second run as idempotence check (always)
+  target exec 'COMMAND'     Run a command on the test machine, e.g. 'cat /etc/motd'
+  target down               Remove the test machine
   pdk-update [--noop]       Update the module to this container's PDK, then validate + unit
   push                      Push the current agent/* branch to your fork
 
@@ -250,18 +257,83 @@ cmd_unit() {
     info "unit: OK"
 }
 
+# --------------------------------------------------------------------------- test machines
+#
+# Shared by `pm acceptance` and `pm target`/`pm apply`. Litmus keeps the machines it
+# provisions in spec/fixtures/litmus_inventory.yaml (ignored by PDK modules' .gitignore).
+
+inventory_file() { printf '%s' "${MODULE_ROOT}/spec/fixtures/litmus_inventory.yaml"; }
+
+inventory_has_targets() {
+    local inv
+    inv="$(inventory_file)"
+    [[ -s "${inv}" ]] && grep -qE '^[[:space:]]*-?[[:space:]]*uri:' "${inv}"
+}
+
+default_collection() {
+    if [[ -n "${GEPPETTO_COLLECTION:-}" ]]; then
+        echo "${GEPPETTO_COLLECTION}"
+    elif [[ "${GEM_WORLD}" == puppetcore ]]; then
+        echo puppetcore9      # PDK 4.x tests Puppet 9 by default
+    else
+        echo puppet8          # PDK 3.x ships Puppet 8.10
+    fi
+}
+
+check_collection() {
+    if [[ "$1" == puppetcore* && "${GEM_WORLD}" != puppetcore ]]; then
+        die "collection $1 needs the Puppet Core gem world ($(gem_source))."
+    fi
+}
+
+# Provision from either Docker images (array name in $1) or a provision.yaml set ($2).
+provision_machines() {
+    local -n images_ref="$1"
+    local set="$2" image
+    if ((${#images_ref[@]})); then
+        for image in "${images_ref[@]}"; do
+            [[ "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "invalid image name '${image}'."
+            info "Provisioning ${image} (docker, not from provision.yaml)"
+            run_rake "litmus:provision[docker,${image}]" || return 1
+        done
+    else
+        grep -qE "^${set}:" "${MODULE_ROOT}/provision.yaml" 2>/dev/null \
+            || die "set '${set}' not found in provision.yaml."
+        info "Provisioning set '${set}'"
+        run_rake "litmus:provision_list[${set}]" || return 1
+    fi
+}
+
+install_agent_and_module() {
+    local collection="$1"
+    info "Installing agent (collection ${collection})"
+    run_rake "litmus:install_agent[${collection}]" || return 1
+    info "Installing module"
+    run_rake litmus:install_module || return 1
+}
+
+module_name() { jq -r '.name' "${MODULE_ROOT}/metadata.json"; }
+
+# Bolt against the machines in the Litmus inventory, from the module root.
+bolt_run() {
+    (cd "${MODULE_ROOT}" && pdk bundle exec bolt "$@" \
+        --targets all --inventoryfile "$(inventory_file)")
+}
+
+# --------------------------------------------------------------------------- acceptance
+
 acceptance_teardown() {
     if ((ACC_PROVISIONED)) && ((ACC_KEEP == 0)); then
         info "Tearing down test machines"
         run_rake litmus:tear_down || warn "tear down failed; check 'docker ps' for leftovers."
     elif ((ACC_PROVISIONED)); then
-        info "Keeping test machines (inventory: ${ACC_INVENTORY})."
-        info "Remove them later with: pdk bundle exec rake litmus:tear_down"
+        info "Keeping test machines (inventory: $(inventory_file))."
+        info "Remove them later with: pm target down"
     fi
 }
 
 cmd_acceptance() {
-    local set="" inventory="" collection="${GEPPETTO_COLLECTION:-}" keep=0 images=() image
+    local set="" inventory="" collection="" keep=0 images=()
     while (($#)); do
         case "$1" in
             --set) set="${2:?--set needs a name}"; shift 2 ;;
@@ -278,53 +350,174 @@ cmd_acceptance() {
     ((${#images[@]})) && sources=$((sources + 1))
     ((sources <= 1)) || die "use only one of --set, --image and --inventory."
     set="${set:-default}"
-    for image in "${images[@]}"; do
-        [[ "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "invalid image name '${image}'."
-    done
-    if [[ -z "${collection}" ]]; then
-        # Follow the Puppet version PDK uses by default: 9 with PDK 4.x, 8.10 with PDK 3.x.
-        if [[ "${GEM_WORLD}" == puppetcore ]]; then collection=puppetcore9; else collection=puppet8; fi
-    fi
-    if [[ "${collection}" == puppetcore* && "${GEM_WORLD}" != puppetcore ]]; then
-        die "collection ${collection} needs the Puppet Core gem world ($(gem_source))."
-    fi
+    collection="${collection:-$(default_collection)}"
+    check_collection "${collection}"
     [[ -d "${MODULE_ROOT}/spec/acceptance" ]] || die "module has no spec/acceptance directory."
+    if [[ -z "${inventory}" ]] && inventory_has_targets; then
+        die "test machines from 'pm target up' are still running; remove them with 'pm target down' first."
+    fi
 
     check_pdk_match
     ensure_bundle
 
     # Globals: the EXIT trap runs after this function's locals are gone.
-    ACC_INVENTORY="${MODULE_ROOT}/spec/fixtures/litmus_inventory.yaml"
     ACC_PROVISIONED=0
     ACC_KEEP="${keep}"
     trap acceptance_teardown EXIT
 
     if [[ -n "${inventory}" ]]; then
         [[ -f "${inventory}" ]] || die "inventory file ${inventory} not found."
-        mkdir -p "$(dirname "${ACC_INVENTORY}")"
-        cp "${inventory}" "${ACC_INVENTORY}"
+        mkdir -p "$(dirname "$(inventory_file)")"
+        cp "${inventory}" "$(inventory_file)"
         info "Using existing machines from ${inventory} (no provisioning, no tear down)"
-    elif ((${#images[@]})); then
-        ACC_PROVISIONED=1
-        for image in "${images[@]}"; do
-            info "Provisioning ${image} (docker, not from provision.yaml)"
-            run_rake "litmus:provision[docker,${image}]"
-        done
     else
-        grep -qE "^${set}:" "${MODULE_ROOT}/provision.yaml" 2>/dev/null \
-            || die "set '${set}' not found in provision.yaml."
-        info "Provisioning set '${set}'"
         ACC_PROVISIONED=1
-        run_rake "litmus:provision_list[${set}]"
+        provision_machines images "${set}"
     fi
 
-    info "Installing agent (collection ${collection})"
-    run_rake "litmus:install_agent[${collection}]"
-    info "Installing module"
-    run_rake litmus:install_module
+    install_agent_and_module "${collection}"
     info "Running acceptance tests"
     run_rake litmus:acceptance:parallel
     info "acceptance: OK"
+}
+
+# --------------------------------------------------------------------------- target / apply
+
+cmd_target() {
+    local sub="${1:-}"
+    (($#)) && shift
+    case "${sub}" in
+        up)   target_up "$@" ;;
+        exec) target_exec "$@" ;;
+        down) target_down "$@" ;;
+        *) die "target: use 'pm target up|exec|down' (see pm help)." ;;
+    esac
+}
+
+target_up() {
+    local set="" collection="" images=()
+    while (($#)); do
+        case "$1" in
+            --set) set="${2:?--set needs a name}"; shift 2 ;;
+            --image) images+=("${2:?--image needs an image}"); shift 2 ;;
+            --collection) collection="${2:?--collection needs a name}"; shift 2 ;;
+            *) die "target up: unknown option '$1'." ;;
+        esac
+    done
+    [[ -z "${set}" || ${#images[@]} -eq 0 ]] || die "use either --set or --image."
+    set="${set:-default}"
+    collection="${collection:-$(default_collection)}"
+    check_collection "${collection}"
+    inventory_has_targets && die "test machines are already running; use them, or 'pm target down' first."
+
+    check_pdk_match
+    ensure_bundle
+    if ! provision_machines images "${set}" || ! install_agent_and_module "${collection}"; then
+        warn "setting up the test machine failed; removing it."
+        run_rake litmus:tear_down || true
+        exit 1
+    fi
+    info "Test machine ready. Next: pm apply FILE.pp | pm apply -e 'MANIFEST'; pm target exec CMD; pm target down"
+}
+
+target_exec() {
+    (($#)) || die "target exec: which command? e.g. pm target exec 'cat /etc/motd'"
+    inventory_has_targets || die "no test machine; start one with 'pm target up'."
+    bolt_run command run "$*"
+}
+
+target_down() {
+    if ! inventory_has_targets; then
+        info "No test machines running."
+        return 0
+    fi
+    info "Tearing down test machines"
+    run_rake litmus:tear_down
+    rm -f "$(inventory_file)"
+    info "target down: OK"
+}
+
+# One puppet apply on every test machine. Prints Puppet's output and sets
+# APPLY_CODES to the space-separated --detailed-exitcodes values.
+apply_once() {
+    local remote="$1" noop="$2" json
+    local cmd="/opt/puppetlabs/bin/puppet apply --detailed-exitcodes --color=false ${noop:+--noop} ${remote}"
+    json="$(bolt_run command run "${cmd}" --format json || true)"
+    [[ -n "${json}" ]] || die "bolt returned no result; is the test machine still running? (pm target up)"
+    jq -r '.items[] | "--- \(.target)", ((.value.stdout, .value.stderr) // empty | select(. != ""))' <<<"${json}"
+    APPLY_CODES="$(jq -r '[.items[] | (.value.exit_code // 1)] | map(tostring) | join(" ")' <<<"${json}")"
+}
+
+cmd_apply() {
+    local manifest="" inline="" noop=""
+    while (($#)); do
+        case "$1" in
+            -e|--execute) inline="${2:?-e needs a manifest}"; shift 2 ;;
+            --noop) noop=1; shift ;;
+            -*) die "apply: unknown option '$1'." ;;
+            *) [[ -z "${manifest}" ]] || die "apply: only one manifest file."; manifest="$1"; shift ;;
+        esac
+    done
+    [[ -n "${manifest}" || -n "${inline}" ]] || die "apply: give a manifest file or -e 'MANIFEST'."
+    [[ -z "${manifest}" || -z "${inline}" ]] || die "apply: use either a file or -e, not both."
+    inventory_has_targets || die "no test machine; start one with 'pm target up'."
+
+    local local_file
+    if [[ -n "${inline}" ]]; then
+        local_file="$(mktemp --suffix=.pp)"
+        printf '%s\n' "${inline}" > "${local_file}"
+    else
+        [[ -f "${manifest}" ]] || die "manifest ${manifest} not found."
+        local_file="$(readlink -f "${manifest}")"
+    fi
+
+    # Always test the current code: reinstall the module before applying.
+    info "Reinstalling $(module_name) on the test machines"
+    bolt_run command run "/opt/puppetlabs/bin/puppet module uninstall --force $(module_name)" >/dev/null || true
+    run_rake litmus:install_module >/dev/null || die "could not reinstall the module on the test machines."
+
+    local remote=/tmp/geppetto-apply.pp
+    bolt_run file upload "${local_file}" "${remote}" >/dev/null || die "could not upload the manifest."
+    [[ -n "${inline}" ]] && rm -f "${local_file}"
+
+    local code failed=0
+    if [[ -n "${noop}" ]]; then
+        info "puppet apply --noop"
+        apply_once "${remote}" 1
+        for code in ${APPLY_CODES}; do
+            case "${code}" in
+                0) info "noop: no changes needed" ;;
+                2) info "noop: changes would be made (see above)" ;;
+                *) warn "noop: puppet reported failures (exit ${code})"; failed=1 ;;
+            esac
+        done
+        ((failed == 0)) || die "apply --noop: FAILED"
+        info "apply --noop: OK"
+        return 0
+    fi
+
+    info "puppet apply (run 1: apply changes)"
+    apply_once "${remote}" ""
+    for code in ${APPLY_CODES}; do
+        case "${code}" in
+            0) info "run 1: no changes (already in the desired state)" ;;
+            2) info "run 1: changes applied (see above)" ;;
+            *) warn "run 1: puppet reported failures (exit ${code})"; failed=1 ;;
+        esac
+    done
+    ((failed == 0)) || die "apply: FAILED in run 1"
+
+    info "puppet apply (run 2: idempotence check)"
+    apply_once "${remote}" ""
+    for code in ${APPLY_CODES}; do
+        case "${code}" in
+            0) info "run 2: no changes (idempotent)" ;;
+            2) warn "run 2: puppet changed resources again: NOT idempotent"; failed=1 ;;
+            *) warn "run 2: puppet reported failures (exit ${code})"; failed=1 ;;
+        esac
+    done
+    ((failed == 0)) || die "apply: FAILED in run 2 (idempotence)"
+    info "apply: OK (changes applied, second run idempotent)"
 }
 
 cmd_pdk_update() {
@@ -415,6 +608,8 @@ main() {
         validate)   cmd_validate "$@" ;;
         unit)       cmd_unit "$@" ;;
         acceptance) cmd_acceptance "$@" ;;
+        target)     cmd_target "$@" ;;
+        apply)      cmd_apply "$@" ;;
         pdk-update) cmd_pdk_update "$@" ;;
         push)       cmd_push ;;
         *) usage >&2; exit 1 ;;
