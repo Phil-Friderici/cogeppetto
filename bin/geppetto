@@ -15,7 +15,7 @@ IMAGE_REPO="geppetto"
 
 # Variables passed from .env into every Pinocchio (by name, never on the command line).
 PASSTHROUGH_VARS=(
-    GH_TOKEN PUPPET_FORGE_TOKEN
+    GH_TOKEN PUPPET_FORGE_TOKEN COPILOT_GITHUB_TOKEN
     GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
     GEPPETTO_GITHUB_OWNER GEPPETTO_COLLECTION GEPPETTO_GEM_SOURCE
 )
@@ -49,12 +49,15 @@ Pinocchios
         --agent AGENT          copilot | claude | codex | shell (default: GEPPETTO_AGENT)
         --upstream OWNER[/REPO]  Upstream repository (default: the fork's parent on GitHub)
         --detach               Start the container without attaching
-  attach TASK [--agent AGENT]  Attach an agent to a running Pinocchio
+        -- ARGS...             Extra arguments for the agent, e.g. -- --yolo
+  attach TASK [--agent AGENT] [-- ARGS...]
+                               Attach an agent to a running Pinocchio
   shell TASK                   Open a shell in a running Pinocchio
   list                         List your Pinocchios
   stop TASK                    Stop and remove a Pinocchio (the workspace stays)
 
 Configuration lives in ~/geppetto/.env (override with GEPPETTO_HOME).
+Default agent arguments: GEPPETTO_<AGENT>_ARGS in .env, e.g. GEPPETTO_COPILOT_ARGS.
 EOF
 }
 
@@ -134,6 +137,18 @@ agent_command() {
         shell)   echo "bash -l" ;;
         *) die "unknown agent '$1' (copilot, claude, codex, shell)." ;;
     esac
+}
+
+# Default arguments for an agent from .env: GEPPETTO_COPILOT_ARGS, GEPPETTO_CLAUDE_ARGS, ...
+# Split on whitespace into the array named by $2; no shell evaluation.
+agent_default_args() {
+    local agent="$1"
+    local -n out="$2"
+    out=()
+    [[ "${agent}" == shell ]] && return 0
+    local var="GEPPETTO_${agent^^}_ARGS"
+    [[ -n "${!var:-}" ]] && read -r -a out <<<"${!var}"
+    return 0
 }
 
 # --------------------------------------------------------------------------- commands
@@ -269,9 +284,10 @@ prepare_checkout() {
 }
 
 cmd_start() {
-    local module="" task="" pdk="" agent="" upstream="" detach=0
+    local module="" task="" pdk="" agent="" upstream="" detach=0 extra=()
     while (($#)); do
         case "$1" in
+            --) shift; extra=("$@"); break ;;
             --name) task="${2:?--name needs a value}"; shift 2 ;;
             --pdk) pdk="${2:?--pdk needs a version}"; shift 2 ;;
             --agent) agent="${2:?--agent needs a value}"; shift 2 ;;
@@ -342,16 +358,17 @@ cmd_start() {
     if ((detach)); then
         info "Started. Attach with: geppetto attach ${task}"
     else
-        cmd_attach "${task}" --agent "${agent}"
+        cmd_attach "${task}" --agent "${agent}" -- "${extra[@]}"
     fi
 }
 
 cmd_attach() {
-    local task="${1:-}" agent=""
+    local task="${1:-}" agent="" extra=()
     [[ -n "${task}" ]] || die "attach: which task?"
     shift
     while (($#)); do
         case "$1" in
+            --) shift; extra=("$@"); break ;;
             --agent) agent="${2:?--agent needs a value}"; shift 2 ;;
             *) die "attach: unknown option '$1'." ;;
         esac
@@ -363,9 +380,12 @@ cmd_attach() {
     [[ "$(container_state "${name}")" == "running" ]] \
         || die "${name} is not running. Start it with 'geppetto start <module> --name ${task}'."
     cmd="$(agent_command "${agent}")"
-    info "Attaching ${agent} to ${name} (leave with Ctrl-D / exit; the container keeps running)"
+    local args=()
+    agent_default_args "${agent}" args
+    [[ "${agent}" == shell ]] || args+=("${extra[@]}")
+    info "Attaching ${agent}${args[*]:+ (${args[*]})} to ${name} (leave with Ctrl-D / exit; the container keeps running)"
     # shellcheck disable=SC2086
-    docker exec --interactive --tty "${name}" ${cmd}
+    docker exec --interactive --tty "${name}" ${cmd} "${args[@]}"
 }
 
 cmd_shell() {

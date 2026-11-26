@@ -42,7 +42,7 @@ AWS host (Ubuntu, nested virtualization available)
 ├── ~/geppetto/                     (per user)
 │   ├── workspace/                  forks, branches, unpushed work
 │   ├── home/                       agent logins and sessions, PDK and gem caches
-│   └── .env                        GH_TOKEN, PUPPET_FORGE_TOKEN (mode 0600, not in any repo)
+│   └── .env                        GH_TOKEN, PUPPET_FORGE_TOKEN, COPILOT_GITHUB_TOKEN (0600)
 └── Container pinocchio-<task>      (image geppetto:pdk-<version>)
     ├── PDK (version via build argument)
     ├── git, gh, docker CLI, Node
@@ -88,6 +88,8 @@ AWS host (Ubuntu, nested virtualization available)
   - End every commit with an `Assisted-by: <agent> (Geppetto)` trailer.
 - **Instructions without touching module repos:** the entrypoint links `AGENTS.md` into each agent's global instruction file (`~/.copilot/copilot-instructions.md`, `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`).
 - **Logins persist:** `~/geppetto/home/` is the container's home directory. No new login is needed after a rebuild.
+- **Copilot authentication:** Copilot CLI uses tokens from the environment in the order `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, and they override a stored `/login`. Because `GH_TOKEN` is the Git token without Copilot permission, a separate `COPILOT_GITHUB_TOKEN` (fine-grained PAT owned by the personal account, permission "Copilot Requests") in `.env` authenticates Copilot in every Pinocchio without logging in.
+- **Agent arguments:** `GEPPETTO_<AGENT>_ARGS` in `.env` (e.g. `GEPPETTO_COPILOT_ARGS`) are added whenever the agent starts; `geppetto start|attach … -- ARGS` adds more for one session. `--yolo` is only an example in `.env.example`, not a default: it lets the agent run everything without asking, including the Docker socket, so the user decides consciously.
 
 ## 7. Commands
 
@@ -98,8 +100,8 @@ geppetto init
 geppetto build [--pdk <version>] | update | images
 geppetto protect <repo>...
 geppetto start <module> [--name <task>] [--pdk <version>] [--agent copilot|claude|codex|shell]
-               [--upstream <owner>[/<repo>]]
-geppetto attach <task> | shell <task> | list | stop <task>
+               [--upstream <owner>[/<repo>]] [-- <agent args>]
+geppetto attach <task> [--agent <agent>] [-- <agent args>] | shell <task> | list | stop <task>
 geppetto cleanup [--yes]
 ```
 

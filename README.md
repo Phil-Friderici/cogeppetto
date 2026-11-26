@@ -31,7 +31,9 @@ See [docs/concept.md](docs/concept.md) for the design and its reasoning.
   permissions **Contents: Read and write** and **Workflows: Read and write**, nothing
   else (Workflows is needed to push changes to `.github/workflows/`, e.g. after
   `pm pdk-update`). Use a dedicated token for Geppetto.
-- An account for the agent you use (e.g. GitHub Copilot).
+- An account for the agent you use (e.g. GitHub Copilot). For Copilot, a second
+  fine-grained token with the account permission **Copilot Requests**
+  (`COPILOT_GITHUB_TOKEN`) avoids logging in again after every rebuild.
 
 > **Security note:** Pinocchios get the host's Docker socket so Litmus can start test
 > containers. Anyone with access to that socket is effectively root on the host. Run
@@ -71,6 +73,7 @@ geppetto start puppetlabs-motd                 # task name = module name
 geppetto start puppetlabs-motd --name issue-42 # second, independent checkout
 geppetto start puppetlabs-motd --pdk 4.0.1     # override the PDK version
 geppetto start puppetlabs-motd --agent shell   # just a shell
+geppetto start puppetlabs-motd -- --yolo       # extra arguments for the agent
 geppetto start my-module --upstream someone    # repo is a copy, not a GitHub fork
 geppetto list
 geppetto attach issue-42                       # reattach the agent
@@ -152,12 +155,19 @@ pm pdk-update           # update, bundle, validate, unit
 
 ## Agents
 
+Default arguments per agent come from `.env` (`GEPPETTO_COPILOT_ARGS`, `GEPPETTO_CLAUDE_ARGS`,
+…); `geppetto start … -- ARGS` and `geppetto attach TASK -- ARGS` add more for one session.
+`--yolo` (Copilot runs every tool without asking) is deliberately not a default; see the
+example in `.env.example` and decide yourself.
+
 Copilot CLI is installed by default. Add others with `GEPPETTO_AGENTS=copilot,claude,codex`
 in `.env` and rebuild. [AGENTS.md](AGENTS.md) holds the shared instructions; the entrypoint
 links it into each agent's global instruction file (`~/.copilot/copilot-instructions.md`,
 `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`), so module repositories stay untouched.
-On first start, log in to the agent (Copilot: `/login`); the login persists in
-`~/geppetto/home`.
+For Copilot, set `COPILOT_GITHUB_TOKEN` in `.env` (fine-grained PAT owned by your personal
+account with the **Copilot Requests** permission). Copilot CLI checks `COPILOT_GITHUB_TOKEN`,
+then `GH_TOKEN`; without its own token it would use the Git token, which has no Copilot
+permission. Other agents: log in on first start; the login persists in `~/geppetto/home`.
 
 ## Troubleshooting
 
@@ -167,6 +177,7 @@ On first start, log in to the agent (Copilot: `/login`); the login persists in
 | `pm push` rejected: `refusing to allow a Personal Access Token to create or update workflow` | The token needs *Workflows: Read and write*. |
 | `git push origin HEAD:main`: `GH013: Repository rule violations` | Expected: `geppetto protect` blocks direct pushes to the default branch. |
 | `Authentication is required for rubygems-puppetcore.puppet.com` | `PUPPET_FORGE_TOKEN` missing or `~/.gemfile` not managed by Geppetto (`pm info` warns). |
+| Copilot asks for `/login` again after every rebuild | Environment tokens override Copilot's stored login, and `GH_TOKEN` (the Git token) has no Copilot permission. Set `COPILOT_GITHUB_TOKEN` in `.env` (Copilot Requests permission), then `geppetto stop` / `start`. |
 | `docker ps` shows `litmusimage/*` containers after a run | Litmus leaves a container behind when provisioning fails after the container started (e.g. SSH setup). `pm` removes these itself since 2026-11-26; for older leftovers run `geppetto cleanup`. |
 | `Could not find compatible versions … bolt … puppet >= 8.11` | Puppet Core gems with PDK 3.x; leave `GEPPETTO_GEM_SOURCE` on `auto` (public gems for PDK 3.x). |
 

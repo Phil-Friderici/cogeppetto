@@ -875,7 +875,7 @@ cmd_push() {
     local base
     base="$(git_m merge-base HEAD "${base_ref}/$(default_branch "${base_ref}")" 2>/dev/null || true)"
     local range="${base:+${base}..}HEAD" var
-    for var in GH_TOKEN FORGE_TOKEN; do
+    for var in GH_TOKEN FORGE_TOKEN COPILOT_GITHUB_TOKEN; do
         # Process substitution: with pipefail, `git log | grep -q` would report SIGPIPE.
         if [[ -n "${!var:-}" ]] && grep -qF -- "${!var}" <(git_m log -p "${range}"); then
             die "the commits contain a token (${var/#FORGE_TOKEN/PUPPET_FORGE_TOKEN}). Remove it from the history before pushing."
