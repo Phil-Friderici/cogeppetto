@@ -47,8 +47,8 @@ See [docs/concept.md](docs/concept.md) for the design and its reasoning.
 git clone https://github.com/Phil-Friderici/cogeppetto.git ~/cogeppetto-src
 ln -s ~/cogeppetto-src/bin/geppetto ~/.local/bin/geppetto   # or add bin/ to PATH
 
-geppetto init            # creates ~/geppetto/{workspace,home,.env}
-$EDITOR ~/geppetto/.env  # tokens, your GitHub account, git identity
+geppetto init            # creates ~/cogeppetto/{workspace,home,.env}
+$EDITOR ~/cogeppetto/.env  # tokens, your GitHub account, git identity
 geppetto build           # image for the default PDK (GEPPETTO_DEFAULT_PDK)
 ```
 
@@ -121,9 +121,9 @@ Docker image instead of a set, without changing `provision.yaml`), `--inventory 
 
 | Host | In the container | Content |
 |---|---|---|
-| `~/geppetto/workspace/<task>` | `/workspace/<task>` | Checkout of your fork |
-| `~/geppetto/home` | `/home/pinocchio` | Agent logins and sessions, PDK and gem caches |
-| `~/geppetto/.env` | environment | Tokens and settings |
+| `~/cogeppetto/workspace/<task>` | `/workspace/<task>` | Checkout of your fork |
+| `~/cogeppetto/home` | `/home/pinocchio` | Agent logins and sessions, PDK and gem caches |
+| `~/cogeppetto/.env` | environment | Tokens and settings |
 
 Images contain only programs. Rebuilding or removing containers never touches your work.
 
@@ -168,7 +168,7 @@ links it into each agent's global instruction file (`~/.copilot/copilot-instruct
 For Copilot, set `COPILOT_GITHUB_TOKEN` in `.env` (fine-grained PAT owned by your personal
 account with the **Copilot Requests** permission). Copilot CLI checks `COPILOT_GITHUB_TOKEN`,
 then `GH_TOKEN`; without its own token it would use the Git token, which has no Copilot
-permission. Other agents: log in on first start; the login persists in `~/geppetto/home`.
+permission. Other agents: log in on first start; the login persists in `~/cogeppetto/home`.
 
 ## Troubleshooting
 

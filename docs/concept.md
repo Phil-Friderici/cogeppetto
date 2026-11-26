@@ -9,7 +9,7 @@ As of 2026-11-26
 ## 1. Name and metaphor
 
 - **CoGeppetto** is the project. "Co" as in copilot and co-author: agents do the work alongside humans, and humans decide what ships. The prefix sets the project apart from the Puppet IDE Geppetto (Cloudsmith/Puppet Labs, 2013–2016) and names the AI part without suggesting autonomy.
-- **Geppetto** is the workshop inside it: host, image and tooling, a tribute to that IDE. Its command stays `geppetto` (like ripgrep and `rg`): short to type, it reads naturally ("Geppetto starts a Pinocchio"), and `~/geppetto`, the `GEPPETTO_*` variables and the `geppetto:pdk-*` images keep their names, so existing hosts need no migration.
+- **Geppetto** is the workshop inside it: host, image and tooling, a tribute to that IDE. Its command stays `geppetto` (like ripgrep and `rg`): short to type, it reads naturally ("Geppetto starts a Pinocchio"), and the `GEPPETTO_*` variables and `geppetto:pdk-*` images keep their names. The data directory is `~/cogeppetto` so that the folder on the host matches the project; hosts set up as `~/geppetto` keep working until the folder is moved, and `geppetto` prints how to move it.
 - **Pinocchios** are the agent containers (`pinocchio-<task>`). They work on their own but stay attached to Geppetto's strings: tokens, rulesets and human review.
 - When a Pinocchio fibs, its nose grows. That is exactly what validate, unit and acceptance are for.
 
@@ -39,7 +39,7 @@ Pull requests against upstream (`puppetlabs`) are created manually by a human on
 ```
 AWS host (Ubuntu, nested virtualization available)
 ├── Docker Engine
-├── ~/geppetto/                     (per user)
+├── ~/cogeppetto/                     (per user)
 │   ├── workspace/                  forks, branches, unpushed work
 │   ├── home/                       agent logins and sessions, PDK and gem caches
 │   └── .env                        GH_TOKEN, PUPPET_FORGE_TOKEN, COPILOT_GITHUB_TOKEN (0600)
@@ -87,7 +87,7 @@ AWS host (Ubuntu, nested virtualization available)
   - Never print, log or commit tokens or environment variables.
   - End every commit with an `Assisted-by: <agent> (CoGeppetto)` trailer.
 - **Instructions without touching module repos:** the entrypoint links `AGENTS.md` into each agent's global instruction file (`~/.copilot/copilot-instructions.md`, `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`).
-- **Logins persist:** `~/geppetto/home/` is the container's home directory. No new login is needed after a rebuild.
+- **Logins persist:** `~/cogeppetto/home/` is the container's home directory. No new login is needed after a rebuild.
 - **Copilot authentication:** Copilot CLI uses tokens from the environment in the order `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, and they override a stored `/login`. Because `GH_TOKEN` is the Git token without Copilot permission, a separate `COPILOT_GITHUB_TOKEN` (fine-grained PAT owned by the personal account, permission "Copilot Requests") in `.env` authenticates Copilot in every Pinocchio without logging in.
 - **Agent arguments:** `GEPPETTO_<AGENT>_ARGS` in `.env` (e.g. `GEPPETTO_COPILOT_ARGS`) are added whenever the agent starts; `geppetto start|attach … -- ARGS` adds more for one session. `--yolo` is only an example in `.env.example`, not a default: it lets the agent run everything without asking, including the Docker socket, so the user decides consciously.
 
@@ -189,7 +189,7 @@ PDK 3.x cannot use Puppet Core gems: all Puppet Core `bolt` releases need Puppet
 **Consequences and handling:**
 - The key is needed **at runtime** in the container (PDK 4.x), not only at build time.
 - In the public world (PDK 3.x, or no key), tests run against Puppet 8.10.0, so results can differ from a CI that uses current Puppet Core.
-- The key lives in `~/geppetto/.env` (mode 0600), per user, alongside `GH_TOKEN`, and is passed to the container as an environment variable. It is not written to disk anywhere else.
+- The key lives in `~/cogeppetto/.env` (mode 0600), per user, alongside `GH_TOKEN`, and is passed to the container as an environment variable. It is not written to disk anywhere else.
 - The key is passed to Litmus test targets as a task parameter. Those targets are disposable, which is acceptable.
 - Mitigations: `AGENTS.md` forbids printing or committing secrets; `pm push` refuses to push commits that contain the token values; the key is per user and can be revoked and regenerated on the Forge.
 - Optional later: pass the key only to `pm` commands that need it instead of the whole container environment.
@@ -228,7 +228,7 @@ Litmus is the successor to Beaker. It uses Bolt for connectivity (SSH or WinRM) 
 ## 11. Parallel and multi-user
 
 - **Several Pinocchios in parallel:** possible from the start. Each has its own name and its own clone or `git worktree`. Litmus test containers get random ports.
-- **Several colleagues, stage 1 (available now):** own login, own `~/geppetto/` data, own tokens, shared Docker daemon. The separation is organizational, not technical: anyone with access to the Docker socket could see other users' containers and their environment variables, including tokens. Only suitable for a trusted team.
+- **Several colleagues, stage 1 (available now):** own login, own `~/cogeppetto/` data, own tokens, shared Docker daemon. The separation is organizational, not technical: anyone with access to the Docker socket could see other users' containers and their environment variables, including tokens. Only suitable for a trusted team.
 - **Stage 2 (deferred):** rootless Docker per user for real isolation. Only the Docker backend changes; no project rework.
 
 ## 12. Repository layout
