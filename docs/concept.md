@@ -102,6 +102,7 @@ geppetto protect <repo>...
 geppetto start <module> [--name <task>] [--pdk <version>] [--agent copilot|claude|codex|shell]
                [--upstream <owner>[/<repo>]] [-- <agent args>]
 geppetto attach <task> [--agent <agent>] [-- <agent args>] | shell <task> | list | stop <task>
+geppetto pr <task>
 geppetto cleanup [--yes]
 ```
 
@@ -120,10 +121,14 @@ pm sets         list provision.yaml sets and whether their images are usable her
 pm acceptance   Litmus: provision → install_agent → install_module → test → tear_down (also on failure)
                 --all-sets: every usable docker set, one after another, with a summary
 pm pdk-update   pdk update --noop → update → bundle → validate → unit
-pm push         push branch cogeppetto/<topic>-<model> to the fork (secret check, trailer warning)
+pm results      recorded test results for the current files
+pm report       pull request description: module PR template + recorded results
+pm push         push branch cogeppetto/<topic>-<model> to the fork (secret check, trailer warning; needs passing results and a report for HEAD)
 ```
 
-**Test order** for agents: `validate` → `unit` → `apply` → `acceptance`; each step must pass before the next.
+**Test order** for agents: `validate` → `unit` → `apply` → `acceptance`; each step must pass before the next. Then `report` and `push`.
+
+**Recorded results and pull request description:** `pm` records every validate, unit, apply and acceptance run in `.git/cogeppetto/results.tsv` with the git tree id of the files it tested (the working tree including uncommitted and untracked files), the Puppet version (from `Gemfile.lock`, or the agent collection on test machines), target and result. A result counts for a commit when the tree ids match, so agents may test before or after committing, and any later change (fix, amend, rebase) invalidates the results. `pm report` builds the pull request description from the module's own template (`.github/pull_request_template.md`), which the agent fills in in English for the maintainers in `.git/cogeppetto/pr-body.md` (inside the git directory, never committed), covering all changes of the branch. `pm` inserts the test tables and ticks the checklist items for spec tests, acceptance tests and manual verification from the recorded results, so the numbers in the PR are not written by the agent. `pm push` refuses to push unless validate and unit passed on HEAD's files with every required Puppet version (PDK's default and, while `requirements` allow it, Puppet 8) and the description belongs to HEAD; missing apply or acceptance results only warn. On the host, `geppetto pr <task>` prints a link to GitHub's compare page with title and description filled in (URL parameters `title` and `body`); the human reviews and creates the pull request. Commit messages stay short and explain why; the report belongs to the PR, not to the git history.
 
 **Manual runs:** `pm apply` runs `puppet apply` on a disposable test machine provisioned by Litmus, never in the Pinocchio itself (no root there, wrong OS, and it would change the agent's environment). It reinstalls the module from the working tree first, uploads the manifest with Bolt (already in the bundle; the Litmus inventory is a Bolt inventory) and runs `puppet apply --detailed-exitcodes` twice: run 1 must succeed (exit 0 or 2), run 2 must report no changes (exit 0), otherwise the module is not idempotent. `--noop` previews changes. The machine stays up between runs until `pm target down`; `pm acceptance` refuses to run while it is up, because both use the same Litmus inventory.
 

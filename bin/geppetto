@@ -58,6 +58,9 @@ Pinocchios
   shell TASK                   Open a shell in a running Pinocchio
   list                         List your Pinocchios
   stop TASK                    Stop and remove a Pinocchio (the workspace stays)
+  pr TASK                      Link to create the pull request upstream, with the
+                               description the agent wrote (pm report); you review
+                               and create it on GitHub
 
 Configuration lives in ~/cogeppetto/.env (override with GEPPETTO_HOME).
 Default agent arguments: GEPPETTO_<AGENT>_ARGS in .env, e.g. GEPPETTO_COPILOT_ARGS.
@@ -391,6 +394,63 @@ cmd_attach() {
     docker exec --interactive --tty "${name}" ${cmd} "${args[@]}"
 }
 
+# OWNER/REPO of a GitHub remote of checkout DIR (empty if missing or not on GitHub).
+checkout_github_repo() {
+    local url
+    url="$(git -C "$1" remote get-url "$2" 2>/dev/null || true)"
+    [[ "${url}" =~ github\.com[:/]([^/]+/[^/]+)$ ]] || return 0
+    printf '%s' "${BASH_REMATCH[1]%.git}"
+}
+
+# Prepare the pull request of a task: the human reviews and creates it on GitHub.
+cmd_pr() {
+    local task="${1:-}"
+    [[ -n "${task}" ]] || die "pr: which task?"
+    local dir="${WORKSPACE}/${task}"
+    [[ -d "${dir}/.git" ]] || die "no checkout ${dir}."
+    local state="${dir}/.git/cogeppetto"
+    [[ -f "${state}/pr.md" && -f "${state}/pr.meta" ]] \
+        || die "no pull request description yet; the agent writes it with 'pm report' (see AGENTS.md)."
+    local branch tree title
+    branch="$(sed -n 's/^branch=//p' "${state}/pr.meta")"
+    tree="$(sed -n 's/^tree=//p' "${state}/pr.meta")"
+    title="$(sed -n 's/^title=//p' "${state}/pr.meta")"
+
+    local head pushed
+    head="$(git -C "${dir}" rev-parse --verify --quiet "refs/heads/${branch}" || true)"
+    [[ -n "${head}" ]] || die "branch ${branch} not found in ${dir}."
+    if [[ "$(git -C "${dir}" rev-parse "${head}^{tree}")" != "${tree}" ]]; then
+        warn "the description belongs to an older state of ${branch}; ask the agent to test again and run 'pm report'."
+    fi
+    pushed="$(git -C "${dir}" rev-parse --verify --quiet "refs/remotes/origin/${branch}" || true)"
+    if [[ "${pushed}" != "${head}" ]]; then
+        warn "${branch} is not pushed in this state; ask the agent to run 'pm push'."
+    fi
+
+    local up fork base
+    up="$(checkout_github_repo "${dir}" upstream)"
+    fork="$(checkout_github_repo "${dir}" origin)"
+    [[ -n "${up}" && -n "${fork}" ]] || die "pr: upstream and origin must both be GitHub repositories."
+    base="$(git -C "${dir}" symbolic-ref --quiet --short refs/remotes/upstream/HEAD 2>/dev/null || true)"
+    base="${base#upstream/}"
+    base="${base:-main}"
+
+    local compare url
+    compare="https://github.com/${up}/compare/${base}...${fork%%/*}:${fork#*/}:${branch}"
+    url="${compare}?expand=1&title=$(jq -rn --arg v "${title}" '$v | @uri')&body=$(jq -sRr @uri < "${state}/pr.md")"
+
+    info "Pull request: ${title}"
+    info "Description: ${state}/pr.md"
+    if ((${#url} <= 8000)); then
+        info "Open this link, review title and description, then click 'Create pull request':"
+        echo "    ${url}"
+    else
+        warn "the description is too long for a link; paste it from ${state}/pr.md."
+        info "Open this link, paste the description, review it, then click 'Create pull request':"
+        echo "    ${compare}?expand=1&title=$(jq -rn --arg v "${title}" '$v | @uri')"
+    fi
+}
+
 cmd_shell() {
     [[ -n "${1:-}" ]] || die "shell: which task?"
     cmd_attach "$1" --agent shell
@@ -493,6 +553,7 @@ main() {
         start)   cmd_start "$@" ;;
         attach)  cmd_attach "$@" ;;
         shell)   cmd_shell "$@" ;;
+        pr)      cmd_pr "$@" ;;
         list|ls) cmd_list "$@" ;;
         stop|rm) cmd_stop "$@" ;;
         help|-h|--help) usage ;;

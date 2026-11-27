@@ -53,8 +53,18 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
    4. `pm acceptance` – when the module has acceptance tests. It provisions Docker
       containers, installs Puppet, runs the tests and tears everything down.
       Run `pm target down` first if a test machine from step 3 is still running.
-6. `pm push` – publishes the branch to the fork. A human reviews it and opens the pull
-   request upstream. Do not try to open pull requests yourself.
+
+   `pm` records every result together with the exact files it tested (`pm results`
+   shows them). A result counts for a commit only if the commit contains exactly those
+   files, so you may test before or after committing. After any change – a fix, an
+   amend, a rebase – run the steps again: the report and the push only use results
+   for the files of the final commit.
+6. `pm report` – writes the pull request description (see *Pull request description*
+   below). Run it after the tests, on the final commit.
+7. `pm push` – publishes the branch to the fork. It refuses to push unless validate
+   and unit (with every required Puppet version) passed on the files of HEAD and
+   `pm report` was run for HEAD. A human reviews the branch and opens the pull request
+   upstream with your description. Do not try to open pull requests yourself.
 
 ## Rules
 
@@ -84,6 +94,34 @@ operator's **fork**; `upstream` points to the repository it was forked from (usu
   why in the commit message.
 - Report honestly: say which steps you ran, which passed and which failed. If you skipped
   acceptance tests, say so and why.
+
+## Pull request description
+
+The pull request goes to the module's maintainers, so the description is written in
+**English**, whatever language you use with the operator. It covers **all changes of the
+branch** (`git diff upstream/<default branch>...HEAD`), not only the last commit.
+
+1. `pm report` creates `.git/cogeppetto/pr-body.md` from the module's pull request
+   template (`.github/pull_request_template.md`) the first time. It lives in the git
+   directory, so it is never committed.
+2. Edit that file:
+   - Line 1: `# <pull request title>`, short and imperative.
+   - Summary: what changed and why. List the changed files; files from the PDK template
+     can be one line ("PDK template: Gemfile, Rakefile, .rubocop.yml, …").
+   - Additional context: your reasoning; every changed test expectation with the reason;
+     every change to `metadata.json` besides `pdk-version`/`template-*`; what a human
+     has to decide (e.g. platforms without a Puppet 9 agent); what you did not do and
+     why (e.g. no `pm apply` for a documentation change).
+   - Related issues: only issues the task is about.
+   - Tick the template's other checkboxes (e.g. "Thought process") when your text
+     provides that.
+   - Do **not** write test results and do **not** tick the checklist items for spec
+     tests, acceptance tests and manual verification: `pm report` inserts the recorded
+     results and sets those items from them.
+3. Run `pm report` again. It writes `.git/cogeppetto/pr.md` and shows it.
+
+Your report to the operator (in the conversation) summarises the same: what changed,
+the test results (`pm results`), what a human has to decide, and what you did not do.
 
 ## Manual runs: `pm target` and `pm apply`
 

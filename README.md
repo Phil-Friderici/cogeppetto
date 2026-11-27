@@ -15,8 +15,9 @@ geppetto start puppetlabs-motd
   └─ clones your fork, picks the PDK version from metadata.json,
      starts pinocchio-puppetlabs-motd and attaches GitHub Copilot CLI
 
-inside: pm branch issue-42 → edit → pm validate → pm unit → pm acceptance → pm push
-you:    review the cogeppetto/issue-42-<model> branch on GitHub and open the PR upstream
+inside: pm branch issue-42 → edit → pm validate → pm unit → pm apply → pm acceptance
+        → pm report → pm push
+you:    geppetto pr issue-42 → review the branch and the description, create the PR
 ```
 
 See [docs/concept.md](docs/concept.md) for the design and its reasoning.
@@ -80,6 +81,7 @@ geppetto list
 geppetto attach issue-42                       # reattach the agent
 geppetto shell issue-42
 geppetto stop issue-42                         # container goes, workspace stays
+geppetto pr issue-42                           # link to create the PR with the agent's description
 geppetto update                                # rebuild images: latest base and agents
 geppetto cleanup                               # remove leftover Litmus test containers
 ```
@@ -100,7 +102,9 @@ Leaving the agent (Ctrl-D / exit) keeps the container running; `attach` brings y
 | `pm target exec '…'` / `pm target down` | Inspect the test machine / remove it |
 | `pm acceptance` | Litmus: provision → install agent → install module → tests → tear down |
 | `pm pdk-update [--noop]` | Move the module to the container's PDK, then validate and unit |
-| `pm push` | Push the `cogeppetto/*` branch to your fork (with a secret check) |
+| `pm results` | Show the recorded test results for the current files |
+| `pm report` | Write the pull request description (English) from the module's PR template and the recorded test results |
+| `pm push` | Push the `cogeppetto/*` branch to your fork: secret check; needs passing validate/unit and a report for HEAD |
 
 `pm sets` shows which sets and images from `provision.yaml` are usable here (Docker images
 that exist in the registry; `abs` and `provision_service` are Puppet internal, `vagrant`
@@ -135,6 +139,19 @@ checks then attribute the commits to you. Every agent commit ends with a trailer
 `Assisted-by: GitHub Copilot CLI, gpt6-luna (CoGeppetto)`, so reviewers can see that an agent was
 involved. If your GitHub settings block pushes that expose your email address, use your
 `users.noreply.github.com` address instead.
+
+## Pull requests
+
+The agent never opens a pull request. It writes the description with `pm report`: the
+module's pull request template, filled in by the agent in English for the maintainers,
+plus the test results that `pm` recorded itself (with the exact files each run tested,
+so the numbers cannot be made up or stale). The checklist items for spec tests,
+acceptance tests and manual verification are ticked from those results. `pm push`
+refuses to push without passing validate/unit results and a description for HEAD.
+
+On the host, `geppetto pr <task>` prints a link to GitHub's compare page with title and
+description filled in. Review both there and click *Create pull request* yourself. Long
+descriptions do not fit in a link; then paste `.git/cogeppetto/pr.md` from the checkout.
 
 ## PDK versions
 

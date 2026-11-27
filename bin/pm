@@ -16,7 +16,7 @@ usage() {
 Usage: pm <command> [options]
 
 Puppet module commands for agents in a CoGeppetto Pinocchio. Test order:
-validate -> unit -> apply -> acceptance; then push.
+validate -> unit -> apply -> acceptance; then report and push.
 
   info                      Show module, PDK versions, gem source, branch and remotes
   setup                     Check remotes, fetch upstream, install the bundle
@@ -45,7 +45,14 @@ validate -> unit -> apply -> acceptance; then push.
   target exec 'COMMAND'     Run a command on the test machine, e.g. 'cat /etc/motd'
   target down               Remove the test machine
   pdk-update [--noop]       Update the module to this container's PDK, then validate + unit
-  push                      Push the current cogeppetto/* branch to your fork
+  results                   Show the recorded test results for the current files
+  report                    Write the pull request description (English) from
+                            .git/cogeppetto/pr-body.md plus the recorded test results
+  push                      Push the current cogeppetto/* branch to your fork; needs
+                            passing validate/unit results and a report for HEAD
+
+Every validate, unit, apply and acceptance run is recorded with the exact files it
+tested. report and push only count results for the files of HEAD.
 
 Exit code 0 means success; anything else means the step failed.
 EOF
@@ -276,16 +283,37 @@ cmd_branch() {
 cmd_validate() {
     check_pdk_match
     ensure_bundle
+    local tree after
+    tree="$(worktree_tree)"
     info "pdk validate $*"
-    (cd "${MODULE_ROOT}" && pdk_run validate "$@")
+    if ! (cd "${MODULE_ROOT}" && pdk_run validate "$@"); then
+        record_result "${tree}" validate "$(lock_puppet_version)" "-" FAILED ""
+        die "validate: FAILED"
+    fi
+    after="$(worktree_tree)"
+    if [[ "${after}" != "${tree}" ]]; then
+        warn "validate changed files (e.g. --auto-correct); result not recorded. Run 'pm validate' again."
+        return 0
+    fi
+    record_result "${tree}" validate "$(lock_puppet_version)" "-" OK ""
     info "validate: OK"
 }
 
 cmd_unit() {
     check_pdk_match
     ensure_bundle
+    local tree log rc=0 counts
+    tree="$(worktree_tree)"
+    log="$(mktemp)"
     info "pdk test unit $*"
-    (cd "${MODULE_ROOT}" && pdk_run test unit "$@")
+    (cd "${MODULE_ROOT}" && pdk_run test unit "$@") | tee "${log}" || rc=$?
+    counts="$(grep -oE '[0-9]+ (tests|examples), [0-9]+ failures?' "${log}" | tail -n 1 || true)"
+    rm -f "${log}"
+    if ((rc != 0)); then
+        record_result "${tree}" unit "$(lock_puppet_version)" "-" FAILED "${counts}"
+        die "unit: FAILED"
+    fi
+    record_result "${tree}" unit "$(lock_puppet_version)" "-" OK "${counts}"
     info "unit: OK"
 }
 
@@ -648,6 +676,8 @@ cmd_acceptance() {
 
     check_pdk_match
     ensure_bundle
+    local tree
+    tree="$(worktree_tree)"
 
     # Existing machines: no provisioning, no per-image handling, no tear down.
     if [[ -n "${inventory}" ]]; then
@@ -655,8 +685,15 @@ cmd_acceptance() {
         mkdir -p "$(dirname "$(inventory_file)")"
         cp "${inventory}" "$(inventory_file)"
         info "Using existing machines from ${inventory} (no provisioning, no tear down)"
-        install_agent_and_module "${collection}" || die "acceptance: agent or module installation failed."
-        run_rake litmus:acceptance:parallel || die "acceptance: tests FAILED"
+        if ! install_agent_and_module "${collection}"; then
+            record_result "${tree}" acceptance "${collection}" "inventory" "AGENT FAILED" "agent or module installation failed"
+            die "acceptance: agent or module installation failed."
+        fi
+        if ! run_rake litmus:acceptance:parallel; then
+            record_result "${tree}" acceptance "${collection}" "inventory" "TEST FAILED" ""
+            die "acceptance: tests FAILED"
+        fi
+        record_result "${tree}" acceptance "${collection}" "inventory" OK ""
         info "acceptance: OK"
         return 0
     fi
@@ -694,8 +731,11 @@ cmd_acceptance() {
             fi
         done
     fi
-    local rc=0
+    local rc=0 r_set r_image r_status r_detail
     acceptance_summary || rc=$?
+    while IFS=$'\t' read -r r_set r_image r_status r_detail; do
+        record_result "${tree}" acceptance "${collection}" "${r_image}" "${r_status}" "${r_detail}"
+    done < "${ACC_RESULTS}"
     rm -f "${ACC_RESULTS}"
     return "${rc}"
 }
@@ -758,6 +798,9 @@ target_up() {
         run_rake litmus:tear_down || true
         exit 1
     fi
+    local desc="set ${set}"
+    ((${#images[@]})) && desc="${images[*]}"
+    printf '%s\t%s\n' "${desc}" "${collection}" > "$(state_dir)/target"
     info "Test machine ready. Next: pm apply FILE.pp | pm apply -e 'MANIFEST'; pm target exec CMD; pm target down"
 }
 
@@ -774,7 +817,7 @@ target_down() {
     fi
     info "Tearing down test machines"
     run_rake litmus:tear_down
-    rm -f "$(inventory_file)"
+    rm -f "$(inventory_file)" "$(state_dir)/target"
     info "target down: OK"
 }
 
@@ -802,6 +845,15 @@ cmd_apply() {
     [[ -n "${manifest}" || -n "${inline}" ]] || die "apply: give a manifest file or -e 'MANIFEST'."
     [[ -z "${manifest}" || -z "${inline}" ]] || die "apply: use either a file or -e, not both."
     inventory_has_targets || die "no test machine; start one with 'pm target up'."
+    local tree t_desc="unknown" t_coll="unknown"
+    tree="$(worktree_tree)"
+    if [[ -f "$(state_dir)/target" ]]; then
+        IFS=$'\t' read -r t_desc t_coll < "$(state_dir)/target"
+    fi
+    apply_failed() {
+        [[ -n "${noop}" ]] || record_result "${tree}" apply "${t_coll}" "${t_desc}" FAILED "$1"
+        die "apply: FAILED ($1)"
+    }
 
     local local_file
     if [[ -n "${inline}" ]]; then
@@ -815,7 +867,7 @@ cmd_apply() {
     # Always test the current code: reinstall the module before applying.
     info "Reinstalling $(module_name) on the test machines"
     bolt_run command run "/opt/puppetlabs/bin/puppet module uninstall --force $(module_name)" >/dev/null || true
-    run_rake litmus:install_module >/dev/null || die "could not reinstall the module on the test machines."
+    run_rake litmus:install_module >/dev/null || apply_failed "module could not be installed"
 
     local remote=/tmp/geppetto-apply.pp
     bolt_run file upload "${local_file}" "${remote}" >/dev/null || die "could not upload the manifest."
@@ -839,14 +891,15 @@ cmd_apply() {
 
     info "puppet apply (run 1: apply changes)"
     apply_once "${remote}" ""
+    local run1="no changes"
     for code in ${APPLY_CODES}; do
         case "${code}" in
             0) info "run 1: no changes (already in the desired state)" ;;
-            2) info "run 1: changes applied (see above)" ;;
+            2) info "run 1: changes applied (see above)"; run1="changes applied" ;;
             *) warn "run 1: puppet reported failures (exit ${code})"; failed=1 ;;
         esac
     done
-    ((failed == 0)) || die "apply: FAILED in run 1"
+    ((failed == 0)) || apply_failed "run 1: puppet reported failures"
 
     info "puppet apply (run 2: idempotence check)"
     apply_once "${remote}" ""
@@ -857,8 +910,9 @@ cmd_apply() {
             *) warn "run 2: puppet reported failures (exit ${code})"; failed=1 ;;
         esac
     done
-    ((failed == 0)) || die "apply: FAILED in run 2 (idempotence)"
-    info "apply: OK (changes applied, second run idempotent)"
+    ((failed == 0)) || apply_failed "run 1: ${run1}; run 2: not idempotent or failed"
+    record_result "${tree}" apply "${t_coll}" "${t_desc}" OK "run 1: ${run1}; run 2: no changes (idempotent)"
+    info "apply: OK (run 1: ${run1}, second run idempotent)"
 }
 
 cmd_pdk_update() {
@@ -918,6 +972,24 @@ cmd_push() {
         printf '%s' "${missing}" >&2
     fi
 
+    # The recorded results and the PR description must describe exactly HEAD.
+    local head_tree problems
+    head_tree="$(git_m rev-parse 'HEAD^{tree}')"
+    problems="$(missing_checks "${head_tree}" required)"
+    if [[ -n "${problems}" ]]; then
+        warn "these checks have not passed on the files of HEAD:"
+        printf '%s\n' "${problems}" | sed 's/^/  /' >&2
+        die "run them (pm results shows what is recorded), then pm report, then pm push."
+    fi
+    problems="$(missing_checks "${head_tree}" optional)"
+    if [[ -n "${problems}" ]]; then
+        warn "not run or not passed on the files of HEAD (say why in the report):"
+        printf '%s\n' "${problems}" | sed 's/^/  /' >&2
+    fi
+    if [[ "$(meta_get tree)" != "${head_tree}" ]]; then
+        die "no PR description for HEAD; run 'pm report' (after the tests) first."
+    fi
+
     info "Pushing ${branch} to origin"
     git_m push --set-upstream origin "HEAD:refs/heads/${branch}"
 
@@ -929,6 +1001,267 @@ cmd_push() {
         info "Ready for review. Compare against upstream:"
         echo "    https://github.com/${upstream_repo}/compare/$(default_branch upstream)...${fork_repo%%/*}:${fork_repo#*/}:${branch}"
     fi
+    info "The human opens the pull request on the host with: geppetto pr $(basename "${MODULE_ROOT}")"
+}
+
+# --------------------------------------------------------------------------- results and report
+#
+# Every validate, unit, apply and acceptance run is recorded in .git/cogeppetto/results.tsv
+# with the tree id of the files it tested: the working tree as it was, including
+# uncommitted and untracked (not ignored) files. A result counts for a commit when the
+# tree ids match, so it does not matter whether the agent tested before or after
+# committing, and every later change invalidates the old results. Columns:
+#   time  tree  step  puppet  target  status  detail
+
+state_dir() {
+    local d
+    d="$(git_m rev-parse --absolute-git-dir)/cogeppetto"
+    mkdir -p "${d}"
+    printf '%s' "${d}"
+}
+
+# Tree id of the working tree as it is now (git's index is not changed).
+worktree_tree() {
+    local gitdir idx
+    gitdir="$(git_m rev-parse --absolute-git-dir)"
+    idx="$(mktemp)"
+    if [[ -f "${gitdir}/index" ]]; then cp "${gitdir}/index" "${idx}"; else rm -f "${idx}"; fi
+    GIT_INDEX_FILE="${idx}" git_m add -A >/dev/null 2>&1 || true
+    GIT_INDEX_FILE="${idx}" git_m write-tree
+    rm -f "${idx}"
+}
+
+# Puppet gem version the last PDK run resolved (from Gemfile.lock).
+lock_puppet_version() {
+    local v
+    v="$(sed -nE 's/^    puppet \(([0-9][0-9.]*).*/\1/p' "${MODULE_ROOT}/Gemfile.lock" 2>/dev/null | head -n 1)"
+    printf '%s' "${v:-unknown}"
+}
+
+# record_result TREE STEP PUPPET TARGET STATUS DETAIL
+record_result() {
+    local detail="${6//$'\t'/ }"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$1" "$2" "$3" "$4" "$5" "${detail//$'\n'/ }" >> "$(state_dir)/results.tsv"
+}
+
+# Latest result per step/puppet/target for TREE, in a fixed step order.
+results_for() {
+    local file
+    file="$(state_dir)/results.tsv"
+    [[ -f "${file}" ]] || return 0
+    awk -F'\t' -v t="$1" '
+        $2 == t { key = $3 FS $4 FS $5; if (!(key in row)) order[n++] = key; row[key] = $0 }
+        END {
+            split("validate unit apply acceptance", steps, " ")
+            for (s = 1; s <= 4; s++)
+                for (i = 0; i < n; i++) { split(row[order[i]], f, FS); if (f[3] == steps[s]) print row[order[i]] }
+        }' "${file}"
+}
+
+# Puppet majors validate and unit must pass with: PDK's default and, with Puppet Core
+# (default Puppet 9), also 8 while metadata.json's requirements still allow it.
+required_puppet_majors() {
+    local default=8 lower
+    [[ "${GEM_WORLD}" == puppetcore ]] && default=9
+    echo "${default}"
+    if ((default > 8)); then
+        lower="$(jq -r '[.requirements[]? | select(.name == "puppet") | .version_requirement][0] // ""' \
+            "${MODULE_ROOT}/metadata.json" | grep -oE '>=? *[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
+        [[ -n "${lower}" && "${lower}" -le 8 ]] && echo 8
+    fi
+    return 0
+}
+
+# missing_checks TREE required|optional: one line per check that has not passed.
+missing_checks() {
+    local tree="$1" kind="$2" rows major step
+    rows="$(results_for "${tree}")"
+    if [[ "${kind}" == required ]]; then
+        for step in validate unit; do
+            while read -r major; do
+                awk -F'\t' -v s="${step}" -v m="${major}" \
+                    '$3 == s && $6 == "OK" && index($4, m ".") == 1 {found=1} END {exit !found}' <<<"${rows}" \
+                    || { [[ "${major}" == "$(required_puppet_majors | head -n 1)" ]] \
+                            && echo "pm ${step}" || echo "pm ${step} --puppet-version ${major}"; }
+            done < <(required_puppet_majors)
+        done
+    else
+        awk -F'\t' '$3 == "apply" && $6 == "OK" {found=1} END {exit !found}' <<<"${rows}" \
+            || echo "pm apply (on a test machine from pm target up)"
+        if [[ -d "${MODULE_ROOT}/spec/acceptance" ]]; then
+            awk -F'\t' '$3 == "acceptance" && $6 == "OK" {found=1} END {exit !found}' <<<"${rows}" \
+                || echo "pm acceptance (no image passed)"
+        fi
+    fi
+    return 0
+}
+
+cmd_results() {
+    local tree head_tree rows
+    tree="$(worktree_tree)"
+    head_tree="$(git_m rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+    if [[ "${tree}" == "${head_tree}" ]]; then
+        info "Recorded results for the files of HEAD ($(git_m rev-parse --short HEAD)):"
+    else
+        info "Recorded results for the current (uncommitted) files:"
+    fi
+    rows="$(results_for "${tree}")"
+    if [[ -z "${rows}" ]]; then
+        echo "    none"
+    else
+        awk -F'\t' '{printf "    %-11s %-8s %-30s %-17s %s\n", $3, $4, ($5 == "-" ? "" : $5), $6, $7}' <<<"${rows}"
+    fi
+    local missing
+    missing="$(missing_checks "${tree}" required; missing_checks "${tree}" optional)"
+    if [[ -n "${missing}" ]]; then
+        info "Not passed yet:"
+        printf '%s\n' "${missing}" | sed 's/^/    /'
+    fi
+}
+
+meta_get() { sed -n "s/^$1=//p" "$(state_dir)/pr.meta" 2>/dev/null | head -n 1; }
+
+# The module's pull request template, or a generic one.
+pr_template() {
+    local f
+    for f in .github/pull_request_template.md .github/PULL_REQUEST_TEMPLATE.md \
+             docs/pull_request_template.md pull_request_template.md; do
+        if [[ -f "${MODULE_ROOT}/${f}" ]]; then
+            cat "${MODULE_ROOT}/${f}"
+            return
+        fi
+    done
+    cat <<'TEMPLATE'
+## Summary
+
+## Additional Context
+
+## Related Issues (if any)
+
+## Checklist
+- [ ] Spec tests.
+- [ ] Acceptance tests.
+- [ ] Manually verified. (For example `puppet apply`)
+TEMPLATE
+}
+
+PR_TITLE_PLACEHOLDER='# <PR title>'
+PR_MARKER='<!-- cogeppetto:test-report -->'
+
+pr_body_skeleton() {
+    cat <<EOF
+${PR_TITLE_PLACEHOLDER}
+<!-- cogeppetto:instructions
+Pull request description for the maintainers, in English. Replace the title line above
+and fill in the template below for ALL changes of the branch (git diff upstream/...HEAD),
+not only the last commit. Then run 'pm report' again; this comment is removed.
+- Do not write test results: 'pm report' inserts them at the marker at the end.
+- Do not tick the checklist items for spec tests, acceptance tests and manual
+  verification: 'pm report' sets them from the recorded results.
+-->
+$(pr_template)
+
+${PR_MARKER}
+EOF
+}
+
+# Markdown for the recorded results of TREE.
+pr_test_section() {
+    local tree="$1" rows missing
+    rows="$(results_for "${tree}")"
+    echo "### Test report"
+    echo
+    echo "Generated by CoGeppetto from the recorded test runs on commit \`$(git_m rev-parse --short HEAD)\` (PDK $(container_pdk_version))."
+    echo
+    if awk -F'\t' '$3 != "acceptance" {f=1} END {exit !f}' <<<"${rows}"; then
+        echo "| Check | Puppet | Target | Result | Details |"
+        echo "|---|---|---|---|---|"
+        awk -F'\t' '$3 != "acceptance" {
+            for (i = 4; i <= 7; i++) gsub(/\|/, "\\|", $i)
+            printf "| %s | %s | %s | %s | %s |\n", $3, $4, ($5 == "-" ? "" : $5), $6, $7 }' <<<"${rows}"
+        echo
+    fi
+    if awk -F'\t' '$3 == "acceptance" {f=1} END {exit !f}' <<<"${rows}"; then
+        echo "#### Acceptance per image"
+        echo
+        echo "| Image | Collection | Status | Details |"
+        echo "|---|---|---|---|"
+        awk -F'\t' '$3 == "acceptance" {
+            for (i = 4; i <= 7; i++) gsub(/\|/, "\\|", $i)
+            printf "| %s | %s | %s | %s |\n", $5, $4, $6, $7 }' <<<"${rows}"
+        echo
+    fi
+    missing="$(missing_checks "${tree}" required; missing_checks "${tree}" optional)"
+    if [[ -n "${missing}" ]]; then
+        echo "Not run or not passed on this commit:"
+        echo
+        printf '%s\n' "${missing}" | sed 's/^/- /'
+        echo
+    fi
+}
+
+cmd_report() {
+    local dir body head_tree branch
+    dir="$(state_dir)"
+    body="${dir}/pr-body.md"
+    branch="$(git_m symbolic-ref --quiet --short HEAD)" || die "not on a branch."
+    if [[ ! -f "${body}" ]]; then
+        pr_body_skeleton > "${body}"
+        info "Created ${body} from the module's pull request template."
+        info "Fill it in (see the comment at the top), then run 'pm report' again."
+        exit 1
+    fi
+    if [[ "$(cat "${body}")" == "$(pr_body_skeleton)" ]]; then
+        die "${body} is still the empty template; fill it in first."
+    fi
+    local title
+    title="$(sed -n '1s/^# //p' "${body}")"
+    [[ -n "${title}" && "${title}" != "<PR title>" ]] \
+        || die "the first line of ${body} must be '# <the pull request title>'."
+
+    head_tree="$(git_m rev-parse 'HEAD^{tree}')"
+    [[ "$(worktree_tree)" == "${head_tree}" ]] \
+        || die "there are uncommitted changes; the report describes HEAD. Commit (and test) first."
+
+    local rows unit_ok=0 acc_ok=0 apply_ok=0
+    rows="$(results_for "${head_tree}")"
+    [[ -z "$(missing_checks "${head_tree}" required | grep '^pm unit' || true)" ]] && unit_ok=1
+    awk -F'\t' '$3 == "acceptance" && $6 == "OK" {f=1} END {exit !f}' <<<"${rows}" && acc_ok=1
+    awk -F'\t' '$3 == "apply" && $6 == "OK" {f=1} END {exit !f}' <<<"${rows}" && apply_ok=1
+
+    local section
+    section="$(pr_test_section "${head_tree}")"
+    # Body without the title line and the instruction comment; checklist items for
+    # tests set from the results; test report at the marker (or at the end).
+    SECTION="${section}" awk -v unit="${unit_ok}" -v acc="${acc_ok}" -v apply="${apply_ok}" \
+        -v marker="${PR_MARKER}" '
+        function tick(line, ok) { sub(/^[[:space:]]*- \[[ xX]\]/, ok ? "- [x]" : "- [ ]", line); return line }
+        NR == 1 && /^# / { next }
+        /^<!-- cogeppetto:instructions/ { skip = 1 }
+        skip { if (/-->/) skip = 0; next }
+        $0 == marker { print ENVIRON["SECTION"]; done = 1; next }
+        /^[[:space:]]*- \[[ xX]\]/ {
+            l = tolower($0)
+            if (l ~ /spec test|unit test/) { print tick($0, unit); next }
+            if (l ~ /acceptance test/) { print tick($0, acc); next }
+            if (l ~ /manually verified|puppet apply/) { print tick($0, apply); next }
+        }
+        { print }
+        END { if (!done) { print ""; print ENVIRON["SECTION"] } }' "${body}" > "${dir}/pr.md"
+    {
+        echo "tree=${head_tree}"
+        echo "commit=$(git_m rev-parse HEAD)"
+        echo "branch=${branch}"
+        echo "title=${title}"
+    } > "${dir}/pr.meta"
+    info "Pull request description for $(git_m rev-parse --short HEAD) written to ${dir}/pr.md:"
+    echo
+    cat "${dir}/pr.md"
+    local missing
+    missing="$(missing_checks "${head_tree}" required)"
+    [[ -z "${missing}" ]] || warn "required checks missing (pm push will refuse): $(tr '\n' ';' <<<"${missing}")"
+    return 0
 }
 
 # --------------------------------------------------------------------------- main
@@ -953,6 +1286,8 @@ main() {
         target)     cmd_target "$@" ;;
         apply)      cmd_apply "$@" ;;
         pdk-update) cmd_pdk_update "$@" ;;
+        results)    cmd_results ;;
+        report)     cmd_report ;;
         push)       cmd_push ;;
         *) usage >&2; exit 1 ;;
     esac
