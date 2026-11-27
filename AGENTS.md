@@ -113,6 +113,10 @@ branch** (`git diff upstream/<default branch>...HEAD`), not only the last commit
      has to decide (e.g. platforms without a Puppet 9 agent); what you did not do and
      why (e.g. no `pm apply` for a documentation change).
    - Related issues: only issues the task is about.
+   - Replace every placeholder text of the template; write "None" where nothing applies.
+   - For every changed test expectation, name the old and the new expectation and why,
+     e.g. "RedHat `9\.3` → `9\.\d+`: FacterDB now reports 9.9".
+   - Do not repeat test results in the text; refer to the test report below instead.
    - Tick the template's other checkboxes (e.g. "Thought process") when your text
      provides that.
    - Do **not** write test results and do **not** tick the checklist items for spec
